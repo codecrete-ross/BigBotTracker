@@ -15,6 +15,16 @@ local frame
 local rows = {}
 local detailLines = {}
 local selectedCandidate
+local dirty = false
+local dirtyReason = nil
+local dirtyElapsed = 0
+local passiveElapsed = 0
+local statusElapsed = 0
+local refreshCount = 0
+
+local DIRTY_REFRESH_SECONDS = 0.5
+local PASSIVE_REFRESH_SECONDS = 5
+local STATUS_REFRESH_SECONDS = 1
 
 local columns = {
     { label = "Tier", x = 8, width = 92 },
@@ -173,6 +183,7 @@ function UI.Refresh()
         return
     end
 
+    refreshCount = refreshCount + 1
     local candidates = Storage.GetAllCandidates()
 
     for rowIndex = 1, ROW_COUNT do
@@ -207,6 +218,8 @@ function UI.Refresh()
     else
         refreshDetails(nil)
     end
+
+    UI.UpdateStatus()
 end
 
 local function createRows(parent)
@@ -404,6 +417,56 @@ end
 
 function UI.UpdateStatus()
     if frame and frame.syncStatusText then
-        frame.syncStatusText:SetText("Sync: " .. tostring(BBT.Sync and BBT.Sync.status or "Unknown"))
+        local tracked = Storage.GetAllCandidates()
+        frame.syncStatusText:SetText(
+            string.format(
+                "Live: scanning | Tracked: %d | Sync: %s",
+                #tracked,
+                tostring(BBT.Sync and BBT.Sync.status or "Unknown")
+            )
+        )
+    end
+end
+
+function UI.MarkDirty(reason)
+    dirty = true
+    dirtyReason = reason or dirtyReason or "data"
+end
+
+function UI.IsDirty()
+    return dirty
+end
+
+function UI.GetRefreshCount()
+    return refreshCount
+end
+
+function UI.OnUpdate(elapsed)
+    if not frame or not frame:IsShown() then
+        return
+    end
+
+    elapsed = elapsed or 0
+    dirtyElapsed = dirtyElapsed + elapsed
+    passiveElapsed = passiveElapsed + elapsed
+    statusElapsed = statusElapsed + elapsed
+
+    if statusElapsed >= STATUS_REFRESH_SECONDS then
+        UI.UpdateStatus()
+        statusElapsed = 0
+    end
+
+    if dirty and dirtyElapsed >= DIRTY_REFRESH_SECONDS then
+        dirty = false
+        dirtyReason = nil
+        dirtyElapsed = 0
+        passiveElapsed = 0
+        UI.Refresh()
+        return
+    end
+
+    if not dirty and passiveElapsed >= PASSIVE_REFRESH_SECONDS then
+        passiveElapsed = 0
+        UI.Refresh()
     end
 end

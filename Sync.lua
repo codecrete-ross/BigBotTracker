@@ -264,9 +264,6 @@ function Sync.HandleAddonMessage(prefix, message, channel, sender)
     local candidate, mergeReason = Storage.MergeNetworkEvidence(capsule)
     if candidate then
         Sync.status = "Received evidence for " .. candidate.displayName
-        if BBT.UI and BBT.UI.Refresh then
-            BBT.UI.Refresh()
-        end
     else
         Util.Debug("Rejected network evidence: " .. tostring(mergeReason))
     end

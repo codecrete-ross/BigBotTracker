@@ -334,6 +334,10 @@ function Storage.RecordObservation(candidate, observation)
         BBT.Sync.QueueCandidate(candidate)
     end
 
+    if BBT.UI and BBT.UI.MarkDirty then
+        BBT.UI.MarkDirty("observation")
+    end
+
     return candidate
 end
 
@@ -346,6 +350,10 @@ function Storage.PromoteFromPretrack(identity, pretrack)
 
     for _, observation in ipairs(pretrack.messages or {}) do
         Storage.RecordObservation(candidate, observation)
+    end
+
+    if BBT.UI and BBT.UI.MarkDirty then
+        BBT.UI.MarkDirty("promotion")
     end
 
     return candidate
@@ -408,6 +416,9 @@ function Storage.MergeNetworkEvidence(capsule)
     }
 
     Scoring.Recalculate(candidate, Storage.GetSettings())
+    if BBT.UI and BBT.UI.MarkDirty then
+        BBT.UI.MarkDirty("network")
+    end
     return candidate, nil
 end
 

@@ -107,12 +107,12 @@ local function onAddonLoaded(loadedName)
     frame:RegisterEvent("PLAYER_LOGIN")
     frame:RegisterEvent("CHAT_MSG_CHANNEL")
     frame:RegisterEvent("CHAT_MSG_ADDON")
-    frame:SetScript("OnUpdate", function()
+    frame:SetScript("OnUpdate", function(_, elapsed)
         if BBT.Sync and BBT.Sync.OnUpdate then
             BBT.Sync.OnUpdate()
         end
-        if BBT.UI and BBT.UI.UpdateStatus then
-            BBT.UI.UpdateStatus()
+        if BBT.UI and BBT.UI.OnUpdate then
+            BBT.UI.OnUpdate(elapsed)
         end
     end)
 end
