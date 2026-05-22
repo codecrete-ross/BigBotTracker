@@ -1,6 +1,6 @@
 ## Interface: 120005
 ## Title: Big Bot Tracker
-## Notes: Tracks Trade and Services chat patterns to surface bot-like advertising behavior.
+## Notes: Monitors Trade and Services chat for suspicious ad patterns with evidence reports.
 ## Author: Codecrete
 ## Version: @project-version@
 ## Category-enUS: Chat

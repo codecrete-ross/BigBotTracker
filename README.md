@@ -1,96 +1,50 @@
 # Big Bot Tracker
 
-Big Bot Tracker is a World of Warcraft Retail addon that helps you spot chatters who behave like automated Trade or Services advertisers.
+Big Bot Tracker is a World of Warcraft Retail addon that monitors Trade and Services chat for suspicious repeated advertising patterns.
 
-It watches Trade and Services chat, looks for repeated timing and message patterns, and shows a ranked report with evidence for each suspicious character.
+It does **not** prove that someone is botting. It does not auto-report players, post accusations, block chat, or send public messages. It shows evidence so you can review the pattern yourself.
 
-Big Bot Tracker does **not** prove that someone is botting. It does not automatically report players, send accusations, block chat, or post anything publicly. It gives you a clear evidence report so you can decide what to do.
+## What It Does
 
-## What It Tracks
+- Watches Trade and Services chat, ignoring your own messages
+- Tracks chatters by normalized `character-realm`
+- Promotes local candidates only after signals such as repeated templates, near-duplicate wording, regular timing, or high volume with ad-like behavior
+- Shows timing, content reuse, activity, persistence, current-channel baseline, and network context
+- Keeps local evidence and network evidence separate
+- Uses transparent heuristic scoring, not machine learning or external services
 
-- Repeated Trade and Services messages
-- How often a character posts
-- How regular their posting interval is
-- Whether their messages reuse the same template
-- Whether similar ads cluster even when words are rearranged
-- Whether their cadence changes between multiple regular schedules
-- Whether their behavior is unusual compared with the current monitored channel
-- How long the behavior has been observed
-- Whether other Big Bot Tracker users have shared matching evidence
+Message count alone is not treated as suspicion. Network sync can create `Preliminary` network-only entries, but peer evidence does not raise a local score, confidence, or tier.
 
-Characters are tracked by `character-realm`, so the same name on two realms is treated as two different people.
+## Report Window
 
-## The Report
+Open the report with `/bbt`, `/bbt open`, `/bbt show`, `/bigbottracker`, or the addon compartment button.
 
-Open the report with `/bbt`.
+The table shows character-realm, tier, score, confidence, first/last seen, message count, posts per hour, average interval, cadence, template reuse, and source: `Local`, `Net`, or `L+N`.
 
-The main table shows:
+Selecting a row shows detail sections for summary, activity, timing, content, evidence families, current-channel baseline, network context, and top evidence reasons. Click headers to sort and hover rows or headers for field explanations.
 
-- Character-realm
-- Suspicion tier
-- Score
-- Confidence
-- First seen
-- Last seen
-- Message count
-- Posts per hour
-- Average interval
-- Cadence
-- Template reuse
-- Local/network evidence marker
+Critical candidates show a `Report` button. It opens Big Bot Tracker's report assist and tries to open Blizzard's in-world report flow when a reportable player location is available. You must choose the Blizzard category, review or paste any text, and submit manually.
 
-Selecting a character shows more detail, including first seen, first suspected, active days, interval consistency, top interval buckets, robust timing variation, cadence switches, near-duplicate messages, evidence-family scores, current-channel baseline comparison, network sightings, network overlap context, and the top reasons behind the score.
+Other report controls:
 
-Critical candidates also show a report button in the detail panel. It can open Blizzard's in-world report flow when the addon has a valid reportable player location. The addon does not submit reports automatically.
+- `Refresh` rebuilds the visible report
+- `Export` saves a compact debug summary in SavedVariables
+- `Toggle Sync` enables or disables evidence sharing
+- `Clear Buffers` clears temporary unpromoted scan buffers
+- `Purge Selected` deletes the selected candidate's saved evidence
+- `Purge All` deletes saved candidate evidence
 
-## Scores And Confidence
+## Scores and Privacy
 
-The score is a bot-likelihood signal based only on local chat behavior. Confidence is shown separately so a small amount of evidence does not look as strong as a long-running pattern. Reloading or relogging does not increase score, confidence, or tier.
+Local scores are based on capped evidence families: timing regularity, content similarity, activity/bursts, persistence, and current-channel baseline outliers. High and Critical tiers require multiple local evidence families, and confidence depends on local evidence volume and diversity.
 
-Big Bot Tracker uses transparent rules, not a black-box model. V1 scoring is grouped into capped evidence families:
+The addon does not persist or sync raw chat text. Saved and synced data is compact: identity, observation ranges/windows, counts, timing summaries, template and shingle hashes, behavior summaries, score snapshots, baseline bins, hashed peer IDs, and version fields.
 
-- Timing regularity
-- Content similarity
-- Activity and burst behavior
-- Persistence across time
-- Current-channel baseline outliers
-
-High and Critical tiers require multiple local evidence families. A single signal, such as template reuse alone or peer sightings alone, should not make someone look like a strong suspect.
-
-Confidence is based on local message volume, valid interval samples, active observation windows, distinct observed days, and evidence-family diversity. It does not use addon sessions or reload count.
-
-Examples of evidence include:
-
-- "Median interval 121s with very low robust variation."
-- "80% of messages match the top template."
-- "Similar ad wording clusters even when text is rearranged."
-- "Cadence changed between stable posting schedules."
-- "Timing is more regular than 95% of monitored advertisers."
-
-## Sync And Privacy
-
-Big Bot Tracker can share compact evidence summaries with other Big Bot Tracker users through a custom addon sync channel. Sync is enabled by default after a first-run notice and can be disabled at any time.
-
-The sync network is not global. It only reaches players who can join the same custom channel, usually people on the same realm or connected realm.
-
-Synced data does **not** include raw chat text by default. It sends compact evidence such as:
-
-- Character-realm
-- Observation time range
-- Coarse observation windows
-- Message count
-- Timing summary
-- Template hashes and counts
-- Shingle cluster hashes and counts
-- Behavior summary
-- Anonymous peer ID
-- Addon/schema/feature version
-
-Network evidence is context only. It does not increase the local score or local confidence because peers may be seeing the same public chat messages.
+Sync uses the `BigBotTracker` custom channel by default. On first login, a notice explains sync; `OK` keeps it enabled, and `Disable Sync` turns it off. The sync network only reaches players who can join the same custom channel, usually on the same realm or connected realm.
 
 ## Commands
 
-- `/bbt` opens the report
+- `/bbt`, `/bbt open`, `/bbt show`, or `/bigbottracker` opens the report
 - `/bbt status` prints tracked candidate and sync status
 - `/bbt sync on` enables sync
 - `/bbt sync off` disables sync
@@ -101,14 +55,6 @@ Network evidence is context only. It does not increase the local score or local 
 - `/bbt clear buffers` clears temporary runtime scan buffers
 - `/bbt debug on`
 - `/bbt debug off`
-
-## Future ML Option
-
-Machine learning is not implemented in v1.
-
-WoW addons cannot train models in-game or call external ML services during play. A future ML feature would need to be trained outside the game from exported feature summaries, not raw synced chat logs.
-
-If added later, a trained model would ship as small Lua data or code in an addon update. It could help calibrate scoring weights, but the addon should still show visible evidence reasons and avoid black-box accusations.
 
 ## Install
 
