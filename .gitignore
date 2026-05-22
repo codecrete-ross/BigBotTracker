@@ -1,0 +1,7 @@
+.claude/
+*.bak
+*.tmp
+*.zip
+*.log
+Thumbs.db
+Desktop.ini

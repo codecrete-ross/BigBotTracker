@@ -1,0 +1,18 @@
+## Interface: 120005
+## Title: Big Bot Tracker
+## Notes: Tracks Trade and Services chat patterns to surface bot-like advertising behavior.
+## Author: Codecrete
+## Version: @project-version@
+## Category-enUS: Chat
+## IconTexture: Interface\AddOns\BigBotTracker\logo
+## AddonCompartmentFunc: BigBotTracker_OnAddonCompartmentClick
+## SavedVariables: BigBotTrackerDB
+
+Util.lua
+Normalizer.lua
+Scoring.lua
+Storage.lua
+ChatScanner.lua
+Sync.lua
+UI.lua
+Core.lua
