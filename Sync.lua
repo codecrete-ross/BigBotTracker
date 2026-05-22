@@ -441,7 +441,6 @@ function Sync.HandleAddonMessage(prefix, message, channel, sender)
         or channel == "PARTY"
         or channel == "RAID"
         or channel == "INSTANCE_CHAT"
-        or channel == "WHISPER"
     if not allowedChannel then
         return
     end

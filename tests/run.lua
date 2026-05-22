@@ -395,6 +395,7 @@ local function assertNotContains(value, pattern, label)
 end
 
 loadModule("Util.lua")
+loadModule("Compat.lua")
 loadModule("Normalizer.lua")
 loadModule("Scoring.lua")
 loadModule("Storage.lua")
@@ -402,6 +403,60 @@ loadModule("ChatScanner.lua")
 loadModule("Sync.lua")
 loadModule("Report.lua")
 loadModule("UI.lua")
+
+local originalProjectId = _G.WOW_PROJECT_ID
+local originalGetBuildInfo = _G.GetBuildInfo
+_G.WOW_PROJECT_MAINLINE = 1
+_G.WOW_PROJECT_CLASSIC = 2
+_G.WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5
+_G.WOW_PROJECT_WRATH_CLASSIC = 11
+_G.WOW_PROJECT_CATACLYSM_CLASSIC = 14
+_G.WOW_PROJECT_MISTS_CLASSIC = 19
+
+local function assertFlavor(projectId, interfaceVersion, expectedFlavor, expectedLabel)
+    _G.WOW_PROJECT_ID = projectId
+    _G.GetBuildInfo = function()
+        return "test", "1", "Jan 1 2026", interfaceVersion
+    end
+    assertEqual(BBT.Compat.GetFlavor(), expectedFlavor, "client flavor for " .. tostring(interfaceVersion))
+    assertEqual(BBT.Compat.GetClientInfo().label, expectedLabel, "client flavor label for " .. tostring(interfaceVersion))
+end
+
+assertFlavor(1, 120005, "retail", "Retail")
+assertFlavor(2, 11508, "vanilla", "Classic Era")
+assertFlavor(5, 20505, "tbc", "TBC Anniversary")
+assertFlavor(11, 30405, "wrath", "Wrath Classic")
+assertFlavor(11, 38001, "titan", "Titan Reforged")
+assertFlavor(14, 40402, "cata", "Cataclysm Classic")
+assertFlavor(19, 50503, "mists", "Mists Classic")
+_G.WOW_PROJECT_ID = 1
+_G.GetBuildInfo = function()
+    return "test", "1", "Jan 1 2026", 120005
+end
+assertEqual(BBT.Compat.IsRetail(), true, "Retail flavor helper")
+assertEqual(BBT.Compat.IsClassic(), false, "Retail should not be Classic")
+_G.WOW_PROJECT_ID = 5
+_G.GetBuildInfo = function()
+    return "test", "1", "Jan 1 2026", 20505
+end
+assertEqual(BBT.Compat.IsRetail(), false, "Classic should not be Retail")
+assertEqual(BBT.Compat.IsClassic(), true, "Classic flavor helper")
+_G.WOW_PROJECT_ID = originalProjectId
+_G.GetBuildInfo = originalGetBuildInfo
+
+local originalCreateFrame = _G.CreateFrame
+_G.CreateFrame = function(frameType, name, parent, template)
+    if template == "MissingTemplate" or template == "AlsoMissing" then
+        error("missing template")
+    end
+    return originalCreateFrame(frameType, name, parent, template)
+end
+local fallbackFrame = BBT.Compat.CreateFrame("Frame", "BigBotTrackerCompatFallback", UIParent, "MissingTemplate", {
+    "AlsoMissing",
+})
+assertTruthy(fallbackFrame, "compat frame creation should fall back when templates are missing")
+assertEqual(fallbackFrame.template, nil, "compat frame fallback should create without missing templates")
+_G.CreateFrame = originalCreateFrame
 
 BBT.Storage.Initialize()
 BBT.Sync.Initialize()
@@ -1094,20 +1149,93 @@ end
 _G.GetChannelName = function()
     return 0
 end
-_G.C_ChatInfo.sentAddonMessages = {}
-fakeInGuild = true
-fakeInGroup = false
-fakeInRaid = false
-fakeInInstanceGroup = false
-BBT.Sync.SetEnabled(true)
-BBT.Sync.QueueCandidate(seller)
-BBT.Sync.SendNext()
-assertEqual(#_G.C_ChatInfo.sentAddonMessages, 1, "sync should send one hidden addon message")
-assertEqual(_G.C_ChatInfo.sentAddonMessages[1].prefix, "BigBotTrack", "sync prefix")
-assertEqual(_G.C_ChatInfo.sentAddonMessages[1].chatType, "GUILD", "sync should use hidden guild transport")
-assertEqual(_G.C_ChatInfo.sentAddonMessages[1].target, nil, "sync should not target a custom channel")
+
+local function expectSyncTransport(label, includeGuild, includeGroup, inGuild, inGroup, inRaid, inInstanceGroup, expected)
+    BBT.Sync.SetEnabled(false)
+    BBT.Storage.GetSettings().sync.includeGuild = includeGuild
+    BBT.Storage.GetSettings().sync.includeGroup = includeGroup
+    _G.C_ChatInfo.sentAddonMessages = {}
+    fakeInGuild = inGuild
+    fakeInGroup = inGroup
+    fakeInRaid = inRaid
+    fakeInInstanceGroup = inInstanceGroup
+    BBT.Sync.lastSendAt = 0
+    seller.lastSyncQueuedAt = nil
+    BBT.Sync.SetEnabled(true)
+    BBT.Sync.QueueCandidate(seller)
+    BBT.Sync.SendNext()
+
+    if expected then
+        assertEqual(#_G.C_ChatInfo.sentAddonMessages, 1, label .. " should send one hidden addon message")
+        assertEqual(_G.C_ChatInfo.sentAddonMessages[1].prefix, "BigBotTrack", label .. " sync prefix")
+        assertEqual(_G.C_ChatInfo.sentAddonMessages[1].chatType, expected, label .. " sync transport")
+        assertEqual(_G.C_ChatInfo.sentAddonMessages[1].target, nil, label .. " sync should not target a custom channel")
+    else
+        assertEqual(#_G.C_ChatInfo.sentAddonMessages, 0, label .. " should not send without a transport")
+        assertEqual(BBT.Sync.status, "Waiting for guild/group", label .. " sync waiting status")
+    end
+end
+
+expectSyncTransport("guild", true, false, true, false, false, false, "GUILD")
+expectSyncTransport("party", false, true, false, true, false, false, "PARTY")
+expectSyncTransport("raid", false, true, false, false, true, false, "RAID")
+expectSyncTransport("instance", false, true, false, false, false, true, "INSTANCE_CHAT")
+expectSyncTransport("no transport", true, true, false, false, false, false, nil)
 assertEqual(joinedCustomChannel, false, "sync should not join custom chat channels")
+
+local function networkPayloadFor(fullName)
+    local firstSeen = fakeNow - 60
+    local lastSeen = fakeNow
+    return table.concat({
+        "C",
+        "2",
+        "3",
+        fullName,
+        tostring(firstSeen),
+        tostring(lastSeen),
+        tostring(math.floor(firstSeen / 1800)),
+        tostring(math.floor(lastSeen / 1800)),
+        "3",
+        "60",
+        "10",
+        "80",
+        "80",
+        "67",
+        "67",
+        "0",
+        "12",
+        "50",
+        "",
+        "",
+    }, "|")
+end
+
+BBT.Sync.SetEnabled(true)
+local ignoredChannelCount = #BBT.Storage.GetAllCandidates()
+BBT.Sync.HandleAddonMessage("BigBotTrack", networkPayloadFor("ChannelOnly-Area52"), "CHANNEL", "Peer-Area52")
+assertEqual(#BBT.Storage.GetAllCandidates(), ignoredChannelCount, "CHANNEL addon packets should be ignored")
+BBT.Sync.HandleAddonMessage("BigBotTrack", networkPayloadFor("WhisperOnly-Area52"), "WHISPER", "Peer-Area52")
+assertEqual(#BBT.Storage.GetAllCandidates(), ignoredChannelCount, "WHISPER addon packets should be ignored")
+BBT.Sync.HandleAddonMessage("BigBotTrack", networkPayloadFor("GuildOnly-Area52"), "GUILD", "Peer-Area52")
+assertTruthy(BBT.Storage.GetCandidate("GuildOnly-Area52"), "GUILD addon packets should still merge")
 BBT.Sync.SetEnabled(false)
+BBT.Storage.GetSettings().sync.includeGuild = true
+BBT.Storage.GetSettings().sync.includeGroup = true
+
+for _ = 1, 3 do
+    fakeNow = fakeNow + 60
+    BBT.ChatScanner.HandleChannelMessage(
+        "WTS classic raid boost now",
+        "ClassicSeller-Area52",
+        "2. Trade - City",
+        nil,
+        2,
+        "Trade",
+        nil,
+        nil
+    )
+end
+assertTruthy(BBT.Storage.GetCandidate("ClassicSeller-Area52"), "Classic-style channel events should handle missing line and guid")
 local futureCandidate, futureReason = BBT.Storage.MergeNetworkEvidence({
     peerId = "peer-future",
     fullName = "Future-Area52",

@@ -9,6 +9,13 @@ local Util = BBT.Util
 local Storage = BBT.Storage
 local Report = BBT.Report
 
+local function createFrame(frameType, name, parent, template, fallbackTemplates)
+    if BBT.Compat and BBT.Compat.CreateFrame then
+        return BBT.Compat.CreateFrame(frameType, name, parent, template, fallbackTemplates)
+    end
+    return CreateFrame(frameType, name, parent, template)
+end
+
 local FRAME_NAME = "BigBotTrackerFrame"
 local REPORT_ASSIST_FRAME_NAME = "BigBotTrackerReportAssistFrame"
 local ADDON_ICON_TEXTURE = "Interface\\AddOns\\BigBotTracker\\logo"
@@ -231,7 +238,7 @@ local function createFont(parent, layer, template, point, relativeTo, relativePo
 end
 
 local function createButton(parent, text, width, height)
-    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    local button = createFrame("Button", nil, parent, "UIPanelButtonTemplate")
     button.width = width or 96
     button.height = height or 22
     button:SetSize(button.width, button.height)
@@ -1131,7 +1138,7 @@ local function createReportAssistFrame()
         return reportAssistFrame
     end
 
-    reportAssistFrame = CreateFrame("Frame", REPORT_ASSIST_FRAME_NAME, UIParent, "BasicFrameTemplateWithInset")
+    reportAssistFrame = createFrame("Frame", REPORT_ASSIST_FRAME_NAME, UIParent, "BasicFrameTemplateWithInset")
     reportAssistFrame:SetSize(REPORT_ASSIST_WIDTH, REPORT_ASSIST_HEIGHT)
     if reportAssistFrame.SetFrameStrata then
         reportAssistFrame:SetFrameStrata("DIALOG")
@@ -1188,7 +1195,7 @@ local function createReportAssistFrame()
     subtitle:SetText("Local guidance for Blizzard's manual report flow.")
     reportAssistFrame.subtitle = subtitle
 
-    local assistStatus = CreateFrame("Frame", nil, reportAssistFrame)
+    local assistStatus = createFrame("Frame", nil, reportAssistFrame)
     assistStatus:SetPoint("TOPLEFT", reportAssistFrame, "TOPLEFT", OUTER_MARGIN, STATUS_TOP)
     assistStatus:SetSize(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2), 24)
     assistStatus:EnableMouse(true)
@@ -1242,7 +1249,7 @@ local function createReportAssistFrame()
     reportAssistFrame.commentDivider =
         addDivider(reportAssistFrame, OUTER_MARGIN, -155, REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2))
 
-    local commentBox = CreateFrame("Frame", nil, reportAssistFrame)
+    local commentBox = createFrame("Frame", nil, reportAssistFrame)
     commentBox:SetPoint("TOPLEFT", reportAssistFrame, "TOPLEFT", OUTER_MARGIN, -164)
     commentBox:SetSize(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2), 70)
     reportAssistFrame.commentBox = commentBox
@@ -1252,7 +1259,7 @@ local function createReportAssistFrame()
     commentBg:SetColorTexture(0.05, 0.05, 0.06, 0.58)
     commentBox.bg = commentBg
 
-    local commentEdit = CreateFrame("EditBox", nil, commentBox)
+    local commentEdit = createFrame("EditBox", nil, commentBox)
     commentEdit:SetPoint("TOPLEFT", commentBox, "TOPLEFT", 8, -7)
     commentEdit:SetSize(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2) - 16, 56)
     if commentEdit.SetAutoFocus then
@@ -1694,7 +1701,7 @@ function UI.ClickRowWatch(index)
 end
 
 local function createHeader(parent)
-    local header = CreateFrame("Frame", nil, parent)
+    local header = createFrame("Frame", nil, parent)
     header:SetPoint("TOPLEFT", parent, "TOPLEFT", OUTER_MARGIN, HEADER_TOP)
     header:SetSize(TABLE_VIEW_WIDTH, HEADER_HEIGHT)
     parent.header = header
@@ -1712,7 +1719,7 @@ local function createHeader(parent)
 
     local x = 0
     for _, column in ipairs(columns) do
-        local button = CreateFrame("Button", nil, header)
+        local button = createFrame("Button", nil, header)
         button:SetPoint("LEFT", header, "LEFT", x, 0)
         button:SetSize(column.width, HEADER_HEIGHT)
         button.column = column
@@ -1832,7 +1839,7 @@ local function showWatchTooltip(owner)
 end
 
 local function createRow(index)
-    local row = CreateFrame("Button", nil, tableContent)
+    local row = createFrame("Button", nil, tableContent)
     row:SetPoint("TOPLEFT", tableContent, "TOPLEFT", 0, -((index - 1) * ROW_HEIGHT))
     row:SetSize(TABLE_CONTENT_WIDTH, ROW_HEIGHT - 1)
     row.index = index
@@ -1844,7 +1851,7 @@ local function createRow(index)
     local x = 0
     for columnIndex, column in ipairs(columns) do
         if column.key == "watch" then
-            local button = CreateFrame("Button", nil, row)
+            local button = createFrame("Button", nil, row)
             button:SetPoint("LEFT", row, "LEFT", x + 5, 0)
             button:SetSize(column.width - 10, ROW_HEIGHT - 4)
             button:SetScript("OnClick", function(self)
@@ -1958,7 +1965,7 @@ end
 local function createTable(parent)
     createHeader(parent)
 
-    tableScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+    tableScroll = createFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
     tableScroll:SetPoint("TOPLEFT", parent, "TOPLEFT", OUTER_MARGIN, TABLE_TOP)
     tableScroll:SetSize(TABLE_VIEW_WIDTH, TABLE_HEIGHT)
     tableScroll:EnableMouseWheel(true)
@@ -1968,7 +1975,7 @@ local function createTable(parent)
         self:SetVerticalScroll(Util.Clamp(current - (delta * ROW_HEIGHT * 3), 0, maxScroll))
     end)
 
-    tableContent = CreateFrame("Frame", nil, tableScroll)
+    tableContent = createFrame("Frame", nil, tableScroll)
     tableContent:SetSize(TABLE_CONTENT_WIDTH, TABLE_HEIGHT)
     tableContent.contentHeight = TABLE_HEIGHT
     tableScroll:SetScrollChild(tableContent)
@@ -2157,7 +2164,7 @@ local function createDetails(parent)
 end
 
 local function createStatusStrip(parent)
-    local statusFrame = CreateFrame("Frame", nil, parent)
+    local statusFrame = createFrame("Frame", nil, parent)
     statusFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", OUTER_MARGIN, STATUS_TOP)
     statusFrame:SetSize(HEADER_CONTENT_WIDTH, 24)
     statusFrame:EnableMouse(true)
@@ -2200,7 +2207,7 @@ local function createStatusStrip(parent)
 end
 
 local function createFilterBar(parent)
-    local filterFrame = CreateFrame("Frame", nil, parent)
+    local filterFrame = createFrame("Frame", nil, parent)
     filterFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", OUTER_MARGIN, FILTER_TOP)
     filterFrame:SetSize(TABLE_VIEW_WIDTH, 22)
     parent.filterFrame = filterFrame
@@ -2381,7 +2388,7 @@ function UI.Create()
         return frame
     end
 
-    frame = CreateFrame("Frame", FRAME_NAME, UIParent, "BasicFrameTemplateWithInset")
+    frame = createFrame("Frame", FRAME_NAME, UIParent, "BasicFrameTemplateWithInset")
     frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
     frame:SetPoint("CENTER")
     if frame.SetFrameStrata then
@@ -2417,7 +2424,7 @@ function UI.Create()
     frame.subtitle:SetWidth(HEADER_CONTENT_WIDTH)
     frame.subtitle:SetText("Chat-based suspicion report for Trade and Services.")
 
-    frame.iconArea = CreateFrame("Frame", nil, frame)
+    frame.iconArea = createFrame("Frame", nil, frame)
     frame.iconArea:SetSize(WINDOW_ICON_SIZE, WINDOW_ICON_SIZE)
     frame.iconArea:SetPoint("TOPRIGHT", frame, "TOPRIGHT", HEADER_ICON_RIGHT, HEADER_ICON_TOP)
 

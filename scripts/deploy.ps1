@@ -11,6 +11,7 @@ $destination = Join-Path $WoWAddOnsRoot $addonName
 $filesToCopy = @(
     "BigBotTracker.toc",
     "Util.lua",
+    "Compat.lua",
     "Normalizer.lua",
     "Scoring.lua",
     "Storage.lua",

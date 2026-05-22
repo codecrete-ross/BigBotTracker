@@ -1,3 +1,9 @@
+## 1.1.0
+
+- Retail and Classic-compatible interface metadata
+- Client compatibility helper for flavor detection and UI template fallbacks
+- Classic-safe hidden guild/group addon-message sync without custom chat channels
+
 ## 0.1.0
 
 - Initial development build

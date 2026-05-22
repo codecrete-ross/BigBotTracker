@@ -4,7 +4,7 @@
   <img src="logo.png" alt="Big Bot Tracker logo" width="320" />
 </p>
 
-Big Bot Tracker is a World of Warcraft Retail addon that monitors Trade and Services chat for suspicious repeated advertising patterns.
+Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors Trade and Services chat for suspicious repeated advertising patterns.
 
 It does **not** prove that someone is botting. It does not auto-report players, post accusations, block chat, or send public messages. It shows evidence so you can review the pattern yourself.
 
@@ -74,7 +74,9 @@ Sync does not join or create custom chat channels. When enabled, it uses hidden 
 
 ## Install
 
-Install via CurseForge, or copy the `BigBotTracker` folder into your `_retail_/Interface/AddOns/` directory.
+Install via CurseForge, or copy the `BigBotTracker` folder into the appropriate game client's `Interface/AddOns/` directory.
+
+Common local install roots include `_retail_`, `_classic_`, `_classic_era_`, `_classic_tbc_` or `_anniversary_` for TBC Anniversary installs, and `_classic_titan_` for Titan Reforged.
 
 ## License
 

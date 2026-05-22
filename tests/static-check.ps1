@@ -8,7 +8,23 @@ if (-not (Test-Path $tocPath)) {
 }
 
 $toc = Get-Content -Path $tocPath
+$interfaceLine = $toc | Where-Object { $_ -match '^## Interface:' } | Select-Object -First 1
+$requiredInterfaces = @("120005", "50503", "40402", "38001", "30405", "20505", "11508")
+foreach ($interface in $requiredInterfaces) {
+    if ($interfaceLine -notmatch "(^|[\s,])$interface($|[\s,])") {
+        throw "TOC Interface is missing target client version: $interface"
+    }
+}
+
 $luaFiles = $toc | Where-Object { $_ -match '\.lua$' }
+$utilIndex = [array]::IndexOf($luaFiles, "Util.lua")
+$compatIndex = [array]::IndexOf($luaFiles, "Compat.lua")
+if ($compatIndex -lt 0) {
+    throw "TOC is missing Compat.lua"
+}
+if ($compatIndex -ne ($utilIndex + 1)) {
+    throw "Compat.lua must load immediately after Util.lua"
+}
 
 foreach ($file in $luaFiles) {
     $path = Join-Path $projectRoot $file
@@ -27,6 +43,7 @@ foreach ($file in $luaFiles) {
 $requiredFiles = @(
     "BigBotTracker.toc",
     "Util.lua",
+    "Compat.lua",
     "Normalizer.lua",
     "Scoring.lua",
     "Storage.lua",
