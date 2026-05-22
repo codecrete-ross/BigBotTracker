@@ -12,7 +12,9 @@ Big Bot Tracker does **not** prove that someone is botting. It does not report p
 - How often a character posts
 - How regular their posting interval is
 - Whether their messages reuse the same template
+- Whether similar ads cluster even when words are rearranged
 - Whether their cadence changes between multiple regular schedules
+- Whether their behavior is unusual compared with the current monitored channel
 - How long the behavior has been observed
 - Whether other Big Bot Tracker users have shared matching evidence
 
@@ -24,29 +26,42 @@ Open the report with `/bbt`.
 
 The main table shows:
 
+- Character-realm
 - Suspicion tier
 - Score
 - Confidence
-- Character-realm
+- First seen
 - Last seen
 - Message count
 - Posts per hour
 - Average interval
+- Cadence
 - Template reuse
 - Local/network evidence marker
 
-Selecting a character shows more detail, including first seen, first suspected, active days, interval consistency, top interval buckets, cadence switches, near-duplicate messages, network sightings, and the top reasons behind the score.
+Selecting a character shows more detail, including first seen, first suspected, active days, interval consistency, top interval buckets, robust timing variation, cadence switches, near-duplicate messages, evidence-family scores, current-channel baseline comparison, network sightings, network overlap context, and the top reasons behind the score.
 
 ## Scores And Confidence
 
-The score is a bot-likelihood signal based only on chat behavior. Confidence is shown separately so a small amount of evidence does not look as strong as a long-running pattern.
+The score is a bot-likelihood signal based only on local chat behavior. Confidence is shown separately so a small amount of evidence does not look as strong as a long-running pattern.
 
-Big Bot Tracker uses transparent rules, not a black-box model. Examples of evidence include:
+Big Bot Tracker uses transparent rules, not a black-box model. V1 scoring is grouped into capped evidence families:
 
-- "Average interval 121s with very low variation."
+- Timing regularity
+- Content similarity
+- Activity and burst behavior
+- Persistence across time
+- Current-channel baseline outliers
+
+High and Critical tiers require multiple local evidence families. A single signal, such as template reuse alone or peer sightings alone, should not make someone look like a strong suspect.
+
+Examples of evidence include:
+
+- "Median interval 121s with very low robust variation."
 - "80% of messages match the top template."
+- "Similar ad wording clusters even when text is rearranged."
 - "Cadence changed between stable posting schedules."
-- "Seen by 3 peers in the sync channel."
+- "Timing is more regular than 95% of monitored advertisers."
 
 ## Sync And Privacy
 
@@ -58,12 +73,16 @@ Synced data does **not** include raw chat text by default. It sends compact evid
 
 - Character-realm
 - Observation time range
+- Coarse observation windows
 - Message count
 - Timing summary
 - Template hashes and counts
+- Shingle cluster hashes and counts
 - Behavior summary
 - Anonymous peer ID
-- Addon/schema version
+- Addon/schema/feature version
+
+Network evidence is context only. It does not increase the local score or local confidence because peers may be seeing the same public chat messages.
 
 ## Commands
 
@@ -90,3 +109,9 @@ If added later, a trained model would ship as small Lua data or code in an addon
 ## Install
 
 Install via CurseForge, or copy the `BigBotTracker` folder into your `_retail_/Interface/AddOns/` directory.
+
+## License
+
+Copyright (c) 2026 Codecrete. All rights reserved.
+
+Big Bot Tracker is proprietary software. The source is visible because World of Warcraft addons must be distributed as visible Lua code, but this project is not open source and does not grant permission to copy, modify, redistribute, rehost, sublicense, or create derivative works without prior written permission.

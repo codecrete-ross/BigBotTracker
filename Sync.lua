@@ -10,7 +10,10 @@ local Storage = BBT.Storage
 local Normalizer = BBT.Normalizer
 
 local PREFIX = "BigBotTrack"
-local PROTOCOL_VERSION = 1
+local PROTOCOL_VERSION = 2
+local FEATURE_VERSION = 2
+local MAX_PAYLOAD_BYTES = 240
+local OBSERVATION_WINDOW_SECONDS = 1800
 
 Sync.queue = Sync.queue or {}
 Sync.queued = Sync.queued or {}
@@ -26,9 +29,16 @@ end
 local function split(value, delimiter)
     local parts = {}
     delimiter = delimiter or "|"
-    local pattern = "([^%" .. delimiter .. "]+)"
-    for part in tostring(value or ""):gmatch(pattern) do
-        parts[#parts + 1] = part
+    value = tostring(value or "")
+    local startIndex = 1
+    while true do
+        local delimiterStart, delimiterEnd = value:find(delimiter, startIndex, true)
+        if not delimiterStart then
+            parts[#parts + 1] = value:sub(startIndex)
+            break
+        end
+        parts[#parts + 1] = value:sub(startIndex, delimiterStart - 1)
+        startIndex = delimiterEnd + 1
     end
     return parts
 end
@@ -43,9 +53,14 @@ local function decodePercent(value)
     return (tonumber(value) or 0) / 100
 end
 
-local function topTemplateHashes(candidate)
+local function observationWindow(timestamp)
+    timestamp = tonumber(timestamp) or Util.GetNow()
+    return math.floor(timestamp / OBSERVATION_WINDOW_SECONDS)
+end
+
+local function topHashes(map, limit)
     local rows = {}
-    for hash, count in pairs(candidate.content and candidate.content.templateCounts or {}) do
+    for hash, count in pairs(map or {}) do
         rows[#rows + 1] = { hash = hash, count = count }
     end
     table.sort(rows, function(left, right)
@@ -56,7 +71,7 @@ local function topTemplateHashes(candidate)
     end)
 
     local encoded = {}
-    for index = 1, math.min(3, #rows) do
+    for index = 1, math.min(limit or 2, #rows) do
         encoded[#encoded + 1] = rows[index].hash .. ":" .. tostring(rows[index].count)
     end
     return table.concat(encoded, ",")
@@ -78,6 +93,10 @@ local function getPeerId(sender)
     return Normalizer.Hash(identity.fullKey)
 end
 
+function Sync.GetLocalPeerId()
+    return getPeerId(Util.GetPlayerFullName())
+end
+
 function Sync.SerializeCandidate(candidate)
     if not candidate or not candidate.displayName then
         return nil
@@ -87,60 +106,81 @@ function Sync.SerializeCandidate(candidate)
     local timing = candidate.timing or {}
     local content = candidate.content or {}
     local behavior = candidate.behavior or {}
+    local firstSeen = math.floor(candidate.firstSeen or 0)
+    local lastSeen = math.floor(candidate.lastSeen or 0)
 
-    local payload = table.concat({
-        "C",
-        tostring(PROTOCOL_VERSION),
-        candidate.displayName,
-        tostring(math.floor(candidate.firstSeen or 0)),
-        tostring(math.floor(candidate.lastSeen or 0)),
-        tostring(candidate.totalMessages or 0),
-        encodeNumber(timing.averageInterval or 0),
-        encodeNumber(timing.coefficientVariation or 0, 100),
-        encodeNumber(timing.globalEntropy or 1, 100),
-        encodeNumber(timing.lowestRollingEntropy or 1, 100),
-        encodeNumber(content.templateReusePercent or 0),
-        tostring(content.uniqueTemplateCount or 0),
-        tostring(timing.cadenceSwitchCount or 0),
-        encodeNumber(behavior.postsPerHour or 0, 10),
-        encodeNumber(score.confidence or 0),
-        topTemplateHashes(candidate),
-    }, "|")
+    for hashLimit = 2, 0, -1 do
+        local payload = table.concat({
+            "C",
+            tostring(PROTOCOL_VERSION),
+            tostring(candidate.featureVersion or FEATURE_VERSION),
+            candidate.displayName,
+            tostring(firstSeen),
+            tostring(lastSeen),
+            tostring(observationWindow(firstSeen)),
+            tostring(observationWindow(lastSeen)),
+            tostring(candidate.totalMessages or 0),
+            encodeNumber(timing.averageInterval or 0),
+            encodeNumber(timing.robustCoefficientVariation or timing.coefficientVariation or 0, 100),
+            encodeNumber(timing.globalEntropy or 1, 100),
+            encodeNumber(timing.lowestRollingEntropy or 1, 100),
+            encodeNumber(content.templateReusePercent or 0),
+            encodeNumber(content.shingleReusePercent or 0),
+            tostring(timing.cadenceSwitchCount or 0),
+            encodeNumber(behavior.postsPerHour or 0, 10),
+            encodeNumber(score.confidence or 0),
+            topHashes(content.templateCounts, hashLimit),
+            topHashes(content.shingleCounts, hashLimit),
+        }, "|")
 
-    if #payload > 240 then
-        payload = payload:sub(1, 240)
+        if #payload <= MAX_PAYLOAD_BYTES then
+            return payload
+        end
     end
 
-    return payload
+    return nil
 end
 
 function Sync.ParseCapsule(message, sender)
+    if #tostring(message or "") > MAX_PAYLOAD_BYTES then
+        return nil, "oversized"
+    end
+
     local parts = split(message, "|")
     if parts[1] ~= "C" or tonumber(parts[2]) ~= PROTOCOL_VERSION then
         return nil, "version"
     end
-    if not parts[3] or parts[3] == "" then
+    if not parts[4] or parts[4] == "" then
         return nil, "identity"
     end
 
     local capsule = {
         peerId = getPeerId(sender),
-        fullName = parts[3],
-        firstSeen = tonumber(parts[4]) or 0,
-        lastSeen = tonumber(parts[5]) or 0,
-        messageCount = tonumber(parts[6]) or 0,
-        averageInterval = tonumber(parts[7]) or 0,
-        coefficientVariation = decodePercent(parts[8]),
-        globalEntropy = decodePercent(parts[9]),
-        rollingEntropy = decodePercent(parts[10]),
-        templateReusePercent = tonumber(parts[11]) or 0,
-        uniqueTemplateCount = tonumber(parts[12]) or 0,
-        cadenceSwitchCount = tonumber(parts[13]) or 0,
-        postsPerHour = (tonumber(parts[14]) or 0) / 10,
-        confidence = tonumber(parts[15]) or 0,
-        templateHashes = parseHashes(parts[16]),
+        featureVersion = tonumber(parts[3]) or 1,
+        fullName = parts[4],
+        firstSeen = tonumber(parts[5]) or 0,
+        lastSeen = tonumber(parts[6]) or 0,
+        firstWindow = tonumber(parts[7]) or 0,
+        lastWindow = tonumber(parts[8]) or 0,
+        messageCount = tonumber(parts[9]) or 0,
+        averageInterval = tonumber(parts[10]) or 0,
+        robustCoefficientVariation = decodePercent(parts[11]),
+        coefficientVariation = decodePercent(parts[11]),
+        globalEntropy = decodePercent(parts[12]),
+        rollingEntropy = decodePercent(parts[13]),
+        templateReusePercent = tonumber(parts[14]) or 0,
+        shingleReusePercent = tonumber(parts[15]) or 0,
+        cadenceSwitchCount = tonumber(parts[16]) or 0,
+        postsPerHour = (tonumber(parts[17]) or 0) / 10,
+        confidence = tonumber(parts[18]) or 0,
+        templateHashes = parseHashes(parts[19]),
+        shingleHashes = parseHashes(parts[20]),
         receivedAt = Util.GetNow(),
     }
+
+    if capsule.firstSeen <= 0 or capsule.lastSeen < capsule.firstSeen then
+        return nil, "timestamp"
+    end
 
     return capsule, nil
 end

@@ -29,7 +29,18 @@ Big Bot Tracker is a World of Warcraft Retail addon that monitors Trade and Serv
 - Do not sync raw chat text by default.
 - Keep local evidence and network evidence visually separate.
 - Key tracked chatters by normalized `character-realm`.
+- Keep Big Bot Tracker proprietary and all rights reserved. Do not add an open-source license.
 - Prefer standalone Lua with no external dependencies unless sync throttling later requires a small proven library.
+
+## V1 Detection Model
+
+V1 is non-ML and explainable. It uses capped local evidence families: timing regularity, content similarity, activity/burst behavior, persistence, and current-channel baseline outlier comparison.
+
+High and Critical tiers require multiple local evidence families. Network evidence must not boost local score or local confidence because peer clients may observe the same public messages.
+
+Feature storage must remain compact. Do not persist raw chat text. Store bounded interval samples, template hashes, shingle hashes, category counters, coarse observation windows, aggregate baseline bins, and score snapshots.
+
+Promotion should stay conservative. Message count alone is not suspicion; promotion requires repeated templates, near-duplicate/shingle clusters, regular timing, or high volume paired with ad intent, low content diversity, or baseline outlier evidence.
 
 ## Future ML
 
@@ -53,4 +64,3 @@ Development order:
    `powershell -ExecutionPolicy Bypass -File .\scripts\deploy.ps1`
 3. Test in-game with `/reload` and `/bbt`.
 4. Wait for user confirmation before committing, tagging, pushing, or releasing.
-

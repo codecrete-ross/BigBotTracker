@@ -7,6 +7,7 @@ BBT.Scoring = BBT.Scoring or {}
 local Scoring = BBT.Scoring
 local Util = BBT.Util
 
+local FEATURE_VERSION = 2
 local LOG_2 = math.log(2)
 
 local function log2(value)
@@ -19,6 +20,15 @@ end
 local function bucketInterval(seconds, binSize)
     binSize = binSize or 10
     return math.floor((seconds + (binSize / 2)) / binSize) * binSize
+end
+
+local function sortedCopy(values)
+    local copy = {}
+    for _, value in ipairs(values or {}) do
+        copy[#copy + 1] = tonumber(value) or 0
+    end
+    table.sort(copy)
+    return copy
 end
 
 local function calculateAverage(values)
@@ -46,6 +56,61 @@ local function calculateVariance(values, average)
     return total / (#values - 1)
 end
 
+local function calculatePercentile(values, percentile)
+    values = sortedCopy(values)
+    if #values == 0 then
+        return 0
+    end
+    if #values == 1 then
+        return values[1]
+    end
+
+    local rank = (percentile / 100) * (#values - 1) + 1
+    local lower = math.floor(rank)
+    local upper = math.ceil(rank)
+    if lower == upper then
+        return values[lower]
+    end
+
+    local fraction = rank - lower
+    return values[lower] + ((values[upper] - values[lower]) * fraction)
+end
+
+local function calculateMedian(values)
+    return calculatePercentile(values, 50)
+end
+
+local function calculateRobustStats(values)
+    values = values or {}
+    if #values == 0 then
+        return {
+            median = 0,
+            mad = 0,
+            iqr = 0,
+            robustCoefficientVariation = 1,
+        }
+    end
+
+    local median = calculateMedian(values)
+    local deviations = {}
+    for _, value in ipairs(values) do
+        deviations[#deviations + 1] = math.abs(value - median)
+    end
+
+    local mad = calculateMedian(deviations)
+    local q1 = calculatePercentile(values, 25)
+    local q3 = calculatePercentile(values, 75)
+    local scaledMad = mad * 1.4826
+    local robustCoefficientVariation = median > 0 and (scaledMad / median) or 1
+
+    return {
+        median = median,
+        mad = mad,
+        iqr = math.max(0, q3 - q1),
+        robustCoefficientVariation = robustCoefficientVariation,
+    }
+end
+
 local function calculateEntropyFromCounts(counts, total)
     if total <= 0 then
         return 1
@@ -54,7 +119,7 @@ local function calculateEntropyFromCounts(counts, total)
     local bucketCount = 0
     local entropy = 0
 
-    for _, count in pairs(counts) do
+    for _, count in pairs(counts or {}) do
         if count > 0 then
             bucketCount = bucketCount + 1
             local p = count / total
@@ -122,7 +187,6 @@ local function buildCadencePhases(intervalRecords, minPhaseLength)
     minPhaseLength = minPhaseLength or 3
 
     local currentBucket
-    local phaseStart
     local phaseCount = 0
     local phaseFirstTime
     local phaseLastTime
@@ -134,11 +198,12 @@ local function buildCadencePhases(intervalRecords, minPhaseLength)
                 count = phaseCount,
                 startTime = phaseFirstTime,
                 endTime = phaseLastTime,
+                duration = math.max(0, (phaseLastTime or 0) - (phaseFirstTime or 0)),
             }
         end
     end
 
-    for index, record in ipairs(intervalRecords or {}) do
+    for _, record in ipairs(intervalRecords or {}) do
         local bucket = record.b
         if bucket == currentBucket then
             phaseCount = phaseCount + 1
@@ -146,7 +211,6 @@ local function buildCadencePhases(intervalRecords, minPhaseLength)
         else
             flush()
             currentBucket = bucket
-            phaseStart = index
             phaseCount = 1
             phaseFirstTime = (record.t or 0) - (record.s or 0)
             phaseLastTime = record.t
@@ -157,151 +221,139 @@ local function buildCadencePhases(intervalRecords, minPhaseLength)
 
     local switches = 0
     local lastBucket
+    local totalDuration = 0
     for _, phase in ipairs(phases) do
         if lastBucket and lastBucket ~= phase.bucket then
             switches = switches + 1
         end
+        totalDuration = totalDuration + (phase.duration or 0)
         lastBucket = phase.bucket
     end
 
-    return phases, switches
+    return phases, switches, totalDuration
 end
 
-local function classifyConsistency(coefficientVariation, rollingEntropy, topBucketPercent)
-    if topBucketPercent >= 75 and rollingEntropy <= 0.25 and coefficientVariation <= 0.12 then
-        return "Very Regular"
+local function buildWindowSummary(intervalRecords, windowSeconds, binSize, anchorTime)
+    local records = {}
+    local values = {}
+    anchorTime = anchorTime or 0
+
+    for _, record in ipairs(intervalRecords or {}) do
+        if anchorTime <= 0 or anchorTime - (record.t or 0) <= windowSeconds then
+            records[#records + 1] = record
+            values[#values + 1] = record.s or 0
+        end
     end
-    if topBucketPercent >= 55 and rollingEntropy <= 0.45 and coefficientVariation <= 0.25 then
-        return "Regular"
+
+    local buckets, counts, intervalCount = buildBucketSummary(records, binSize)
+    local robust = calculateRobustStats(values)
+    local messageCount = intervalCount > 0 and intervalCount + 1 or 0
+
+    return {
+        seconds = windowSeconds,
+        intervalCount = intervalCount,
+        messageCount = messageCount,
+        entropy = calculateEntropyFromCounts(counts, intervalCount),
+        topBucket = buckets[1] and buckets[1].bucket or 0,
+        topBucketPercent = buckets[1] and buckets[1].percent or 0,
+        medianInterval = robust.median,
+        robustCoefficientVariation = robust.robustCoefficientVariation,
+        postsPerHour = windowSeconds > 0 and (messageCount / (windowSeconds / 3600)) or 0,
+    }
+end
+
+local function classifyCadence(timing, behavior)
+    local intervalCount = timing.intervalCount or 0
+    local buckets = timing.dominantBuckets or {}
+    local topBucket = buckets[1]
+    local topBucketPercent = topBucket and (topBucket.percent or 0) or 0
+    local rollingEntropy = timing.lowestRollingEntropy or 1
+    local robustCv = timing.robustCoefficientVariation or 1
+    local cadenceSwitches = timing.cadenceSwitchCount or 0
+    local phaseCount = #(timing.cadencePhases or {})
+
+    if intervalCount < 3 then
+        return "Sparse"
     end
-    if topBucketPercent >= 40 or rollingEntropy <= 0.65 then
-        return "Some Pattern"
+    if cadenceSwitches > 0 and phaseCount >= 2 then
+        return "Mixed Regular"
+    end
+    if topBucketPercent >= 75 and rollingEntropy <= 0.25 and robustCv <= 0.16 then
+        return "Fixed Cadence"
+    end
+    if
+        (topBucketPercent >= 60 and rollingEntropy <= 0.45 and robustCv <= 0.35)
+        or (topBucketPercent >= 35 and robustCv <= 0.18)
+    then
+        return "Jittered Cadence"
+    end
+    if
+        (behavior and (behavior.burstCount or 0) > 0)
+        and (behavior.activeSpan or 0) <= 600
+        and topBucketPercent < 55
+    then
+        return "Burst-Only"
     end
     return "Variable"
 end
 
-function Scoring.BucketInterval(seconds, binSize)
-    return bucketInterval(seconds, binSize)
-end
-
-function Scoring.CalculateEntropy(counts, total)
-    return calculateEntropyFromCounts(counts, total)
-end
-
-function Scoring.UpdateMetrics(candidate, settings)
-    settings = settings or {}
-    local timingSettings = settings.timing or {}
-    local intervalBin = timingSettings.intervalBin or 10
-    local intervals = candidate.timing and candidate.timing.intervals or {}
-    local intervalValues = {}
-
-    for _, record in ipairs(intervals) do
-        intervalValues[#intervalValues + 1] = record.s or 0
-        record.b = record.b or bucketInterval(record.s or 0, intervalBin)
+local function addWeightedReason(reasons, weight, text)
+    if text and text ~= "" then
+        reasons[#reasons + 1] = {
+            weight = weight or 0,
+            text = text,
+        }
     end
+end
 
-    local average = calculateAverage(intervalValues)
-    local variance = calculateVariance(intervalValues, average)
-    local coefficientVariation = average > 0 and (math.sqrt(variance) / average) or 1
-    local buckets, bucketCounts, intervalCount = buildBucketSummary(intervals, intervalBin)
-    local globalEntropy = calculateEntropyFromCounts(bucketCounts, intervalCount)
-
-    local rolling = {}
-    local rollingWindows = timingSettings.rollingWindows or { 5, 10, 20 }
-    local lowestRollingEntropy = 1
-    for _, windowSize in ipairs(rollingWindows) do
-        local entropy = calculateRollingEntropy(intervals, windowSize, intervalBin)
-        rolling["w" .. tostring(windowSize)] = entropy
-        if entropy < lowestRollingEntropy then
-            lowestRollingEntropy = entropy
+local function finalizeReasons(reasons)
+    table.sort(reasons, function(left, right)
+        if left.weight == right.weight then
+            return left.text < right.text
         end
+        return left.weight > right.weight
+    end)
+
+    local finalized = {}
+    for index = 1, math.min(5, #reasons) do
+        finalized[index] = reasons[index].text
     end
-
-    local phases, cadenceSwitches = buildCadencePhases(intervals, timingSettings.minPhaseLength or 3)
-    local topBucketPercent = buckets[1] and buckets[1].percent or 0
-
-    candidate.timing.averageInterval = average
-    candidate.timing.intervalVariance = variance
-    candidate.timing.coefficientVariation = coefficientVariation
-    candidate.timing.globalEntropy = globalEntropy
-    candidate.timing.rollingEntropy = rolling
-    candidate.timing.lowestRollingEntropy = lowestRollingEntropy
-    candidate.timing.dominantBuckets = buckets
-    candidate.timing.cadencePhases = phases
-    candidate.timing.cadenceSwitchCount = cadenceSwitches
-    candidate.timing.intervalConsistency =
-        classifyConsistency(coefficientVariation, lowestRollingEntropy, topBucketPercent)
-
-    local content = candidate.content or {}
-    local templateTotal = content.templateTotal or candidate.totalMessages or 0
-    local topTemplateCount = 0
-    local uniqueTemplates = 0
-
-    for _, count in pairs(content.templateCounts or {}) do
-        uniqueTemplates = uniqueTemplates + 1
-        if count > topTemplateCount then
-            topTemplateCount = count
-        end
-    end
-
-    content.uniqueTemplateCount = uniqueTemplates
-    content.templateReusePercent = templateTotal > 0 and (topTemplateCount / templateTotal * 100) or 0
-    content.uniqueTemplateRatio = templateTotal > 0 and (uniqueTemplates / templateTotal) or 0
-
-    candidate.content = content
-
-    local now = Util.GetNow()
-    local firstSeen = candidate.firstSeen or now
-    local lastSeen = candidate.lastSeen or now
-    candidate.behavior = candidate.behavior or {}
-    candidate.behavior.activeSpan = math.max(0, lastSeen - firstSeen)
-    candidate.behavior.postsPerHour = candidate.behavior.activeSpan > 0
-            and ((candidate.totalMessages or 0) / (candidate.behavior.activeSpan / 3600))
-        or (candidate.totalMessages or 0)
+    return finalized
 end
 
-local function addReason(reasons, text)
-    if #reasons < 5 then
-        reasons[#reasons + 1] = text
-    end
-end
+local function calculateNetworkContext(network)
+    network = network or {}
+    local peerCount = network.peerCount or 0
+    local summary = network.summary or {}
+    local score = math.min(12, peerCount * 4)
 
-local function calculateConfidence(candidate)
-    local messageCount = candidate.totalMessages or 0
-    local intervalCount = candidate.timing and candidate.timing.intervalCount or 0
-    local dayCount = Util.CountMap(candidate.daysSeen)
-    local peerCount = candidate.network and candidate.network.peerCount or 0
-    local networkSummary = candidate.network and candidate.network.summary or {}
-
-    local confidence = 0
-    confidence = confidence + math.min(messageCount / 12, 1) * 30
-    confidence = confidence + math.min(intervalCount / 8, 1) * 30
-    confidence = confidence + math.min(dayCount / 3, 1) * 15
-    confidence = confidence + math.min(peerCount / 3, 1) * 15
     if peerCount >= 2 then
-        confidence = confidence + math.min((networkSummary.messageCount or 0) / 30, 1) * 20
+        if (summary.averageRollingEntropy or 1) <= 0.40 then
+            score = score + 8
+        end
+        if (summary.averageTemplateReusePercent or 0) >= 60 then
+            score = score + 8
+        end
+        if (summary.messageCount or 0) >= 20 then
+            score = score + 6
+        end
+        if (summary.cadenceSwitchCount or 0) > 0 then
+            score = score + 3
+        end
+        if (summary.averagePostsPerHour or 0) >= 10 then
+            score = score + 3
+        end
     end
 
-    return Util.Clamp(confidence, 0, 100)
-end
+    local confidence = network.confidence or 0
+    if peerCount > 0 then
+        confidence = math.max(confidence, math.min(peerCount / 3, 1) * 30)
+    end
 
-local function getTier(score, confidence)
-    if confidence < 35 then
-        return "Insufficient Data"
-    end
-    if score >= 85 then
-        return "Critical"
-    end
-    if score >= 70 then
-        return "High"
-    end
-    if score >= 45 then
-        return "Medium"
-    end
-    if score >= 20 then
-        return "Low"
-    end
-    return "Insufficient Data"
+    return {
+        score = Util.Clamp(score, 0, 44),
+        confidence = Util.Clamp(confidence, 0, 100),
+    }
 end
 
 local function getRecencyFactor(candidate)
@@ -318,6 +370,456 @@ local function getRecencyFactor(candidate)
     return math.max(0.55, 1 - (decayProgress * 0.45))
 end
 
+local function countEvidenceFamilies(familyScores)
+    local count = 0
+    if (familyScores.timing or 0) >= 8 then
+        count = count + 1
+    end
+    if (familyScores.content or 0) >= 8 then
+        count = count + 1
+    end
+    if (familyScores.activity or 0) >= 6 then
+        count = count + 1
+    end
+    if (familyScores.persistence or 0) >= 4 then
+        count = count + 1
+    end
+    if (familyScores.baseline or 0) >= 5 then
+        count = count + 1
+    end
+    return count
+end
+
+local function calculateConfidence(candidate, familyCount)
+    local messageCount = candidate.totalMessages or 0
+    local timing = candidate.timing or {}
+    local intervalCount = timing.intervalCount or 0
+    local dayCount = Util.CountMap(candidate.daysSeen)
+    local sessionCount = Util.CountMap(candidate.sessionsSeen)
+    local activeWindows = 0
+
+    for _, summary in pairs(timing.windowSummaries or {}) do
+        if (summary.messageCount or 0) >= 3 then
+            activeWindows = activeWindows + 1
+        end
+    end
+
+    local confidence = 0
+    confidence = confidence + math.min(messageCount / 18, 1) * 28
+    confidence = confidence + math.min(intervalCount / 12, 1) * 26
+    confidence = confidence + math.min(activeWindows / 3, 1) * 12
+    confidence = confidence + math.min(dayCount / 3, 1) * 14
+    confidence = confidence + math.min(sessionCount / 2, 1) * 8
+    confidence = confidence + math.min((familyCount or 0) / 3, 1) * 12
+
+    return Util.Clamp(confidence, 0, 100)
+end
+
+local function getTier(score, confidence, familyCount, familyScores, hasMeaningfulEvidence)
+    if not hasMeaningfulEvidence then
+        return "Insufficient Data"
+    end
+
+    local strongTimingAndContent = (familyScores.timing or 0) >= 30 and (familyScores.content or 0) >= 25
+    if score >= 85 and confidence >= 70 and (familyCount >= 3 or strongTimingAndContent) then
+        return "Critical"
+    end
+    if score >= 70 and confidence >= 55 and familyCount >= 2 then
+        return "High"
+    end
+    if score >= 45 and confidence >= 35 and familyCount >= 1 then
+        return "Medium"
+    end
+    if score >= 20 then
+        return "Low"
+    end
+    return "Insufficient Data"
+end
+
+local function scoreTiming(candidate, reasons)
+    local timing = candidate.timing or {}
+    local intervalCount = timing.intervalCount or 0
+    if intervalCount < 4 then
+        return 0
+    end
+
+    local score = 0
+    local topBucket = timing.dominantBuckets and timing.dominantBuckets[1]
+    local topBucketPercent = topBucket and (topBucket.percent or 0) or 0
+    local rollingEntropy = timing.lowestRollingEntropy or 1
+    local robustCv = timing.robustCoefficientVariation or 1
+    local cadenceClass = timing.cadenceClass or "Variable"
+
+    if cadenceClass == "Fixed Cadence" then
+        score = score + 15
+        addWeightedReason(reasons, 15, "Timing matches a fixed posting cadence.")
+    elseif cadenceClass == "Jittered Cadence" then
+        score = score + 11
+        addWeightedReason(reasons, 11, "Timing looks jittered but still cadence-bound.")
+    elseif cadenceClass == "Mixed Regular" then
+        score = score + 12
+        addWeightedReason(reasons, 12, "Cadence changed between stable posting schedules.")
+    end
+
+    if topBucketPercent >= 75 then
+        score = score + 8
+        addWeightedReason(
+            reasons,
+            8,
+            string.format("%d%% of intervals fall near %ds.", math.floor(topBucketPercent + 0.5), topBucket.bucket or 0)
+        )
+    elseif topBucketPercent >= 60 then
+        score = score + 5
+        addWeightedReason(reasons, 5, string.format("%d%% of intervals share one cadence.", topBucketPercent))
+    end
+
+    if rollingEntropy <= 0.20 then
+        score = score + 7
+        addWeightedReason(reasons, 7, "Recent posting windows have very low interval entropy.")
+    elseif rollingEntropy <= 0.40 then
+        score = score + 4
+    end
+
+    if robustCv <= 0.12 then
+        score = score + 5
+        addWeightedReason(
+            reasons,
+            5,
+            string.format(
+                "Median interval %ds with very low robust variation.",
+                math.floor((timing.medianInterval or 0) + 0.5)
+            )
+        )
+    elseif robustCv <= 0.25 then
+        score = score + 3
+    end
+
+    if (timing.cadencePhaseDuration or 0) >= 600 then
+        score = score + 3
+    end
+
+    return Util.Clamp(score, 0, 35)
+end
+
+local function scoreContent(candidate, reasons)
+    local content = candidate.content or {}
+    local messageCount = candidate.totalMessages or 0
+    if messageCount < 3 then
+        return 0
+    end
+
+    local score = 0
+    local templateReuse = content.templateReusePercent or 0
+    local shingleReuse = content.shingleReusePercent or 0
+    local nearDuplicateRate = messageCount > 0 and ((content.nearDuplicateCount or 0) / messageCount * 100) or 0
+    local intentRepeat = content.dominantIntentPercent or 0
+
+    if templateReuse >= 80 then
+        score = score + 13
+        addWeightedReason(reasons, 13, string.format("%d%% of messages match the top template.", templateReuse))
+    elseif templateReuse >= 60 then
+        score = score + 9
+        addWeightedReason(reasons, 9, "Most messages reuse the same exact template.")
+    elseif templateReuse >= 40 then
+        score = score + 5
+    end
+
+    if shingleReuse >= 75 then
+        score = score + 10
+        addWeightedReason(reasons, 10, "Similar ad wording clusters even when text is rearranged.")
+    elseif shingleReuse >= 55 then
+        score = score + 6
+    end
+
+    if nearDuplicateRate >= 60 then
+        score = score + 5
+        addWeightedReason(
+            reasons,
+            5,
+            string.format("%d near-duplicate messages observed.", content.nearDuplicateCount or 0)
+        )
+    elseif nearDuplicateRate >= 30 then
+        score = score + 3
+    end
+
+    if intentRepeat >= 75 and (content.adIntentTotal or 0) >= 3 then
+        score = score + 4
+    end
+
+    return Util.Clamp(score, 0, 30)
+end
+
+local function scoreActivity(candidate, reasons)
+    local behavior = candidate.behavior or {}
+    local timing = candidate.timing or {}
+    local score = 0
+    local rate = math.max(behavior.postsPerHour or 0, behavior.activeSessionPostsPerHour or 0)
+
+    for _, summary in pairs(timing.windowSummaries or {}) do
+        rate = math.max(rate, summary.postsPerHour or 0)
+    end
+
+    if rate >= 60 then
+        score = score + 10
+        addWeightedReason(reasons, 10, string.format("%.1f posts per hour observed in active windows.", rate))
+    elseif rate >= 30 then
+        score = score + 7
+        addWeightedReason(reasons, 7, string.format("%.1f posts per hour observed.", rate))
+    elseif rate >= 15 then
+        score = score + 4
+    end
+
+    if (behavior.burstCount or 0) >= 2 then
+        score = score + 6
+        addWeightedReason(reasons, 6, string.format("%d burst windows detected.", behavior.burstCount or 0))
+    elseif (behavior.burstCount or 0) == 1 then
+        score = score + 3
+    end
+
+    if (behavior.longestActiveSpan or 0) >= 1800 then
+        score = score + 4
+    end
+
+    return Util.Clamp(score, 0, 20)
+end
+
+local function scorePersistence(candidate, reasons)
+    local score = 0
+    local dayCount = Util.CountMap(candidate.daysSeen)
+    local sessionCount = Util.CountMap(candidate.sessionsSeen)
+    local behavior = candidate.behavior or {}
+
+    if dayCount >= 3 then
+        score = score + 5
+        addWeightedReason(reasons, 5, string.format("Observed on %d separate days.", dayCount))
+    elseif dayCount >= 2 then
+        score = score + 3
+    end
+
+    if sessionCount >= 2 then
+        score = score + 2
+    end
+
+    if (behavior.activeSpan or 0) >= 3600 then
+        score = score + 3
+        addWeightedReason(reasons, 3, "Posting pattern spans more than an hour.")
+    elseif (behavior.activeSpan or 0) >= 1800 then
+        score = score + 2
+    end
+
+    return Util.Clamp(score, 0, 10)
+end
+
+local function scoreBaseline(candidate, reasons)
+    local baseline = candidate.baseline or {}
+    if (baseline.sampleCount or 0) < 8 then
+        return 0
+    end
+
+    local score = 0
+    local ratePercentile = baseline.postsPerHourPercentile or 0
+    local regularityPercentile = baseline.regularityPercentile or 0
+    local reusePercentile = baseline.templateReusePercentile or 0
+
+    if regularityPercentile >= 95 then
+        score = score + 6
+        addWeightedReason(reasons, 6, "Timing is more regular than 95% of monitored advertisers.")
+    elseif regularityPercentile >= 90 then
+        score = score + 4
+    end
+
+    if ratePercentile >= 95 then
+        score = score + 5
+        addWeightedReason(reasons, 5, "Posting rate is unusually high for the current channel.")
+    elseif ratePercentile >= 90 then
+        score = score + 3
+    end
+
+    if reusePercentile >= 95 then
+        score = score + 4
+    elseif reusePercentile >= 90 then
+        score = score + 2
+    end
+
+    return Util.Clamp(score, 0, 15)
+end
+
+function Scoring.BucketInterval(seconds, binSize)
+    return bucketInterval(seconds, binSize)
+end
+
+function Scoring.CalculateEntropy(counts, total)
+    return calculateEntropyFromCounts(counts, total)
+end
+
+function Scoring.CalculateRobustStats(values)
+    return calculateRobustStats(values)
+end
+
+function Scoring.UpdateMetrics(candidate, settings)
+    settings = settings or {}
+    local timingSettings = settings.timing or {}
+    local intervalBin = timingSettings.intervalBin or 10
+    local intervals = candidate.timing and candidate.timing.intervals or {}
+    local intervalValues = {}
+
+    candidate.featureVersion = FEATURE_VERSION
+    candidate.timing = candidate.timing or {}
+    candidate.content = candidate.content or {}
+    candidate.behavior = candidate.behavior or {}
+
+    for _, record in ipairs(intervals) do
+        intervalValues[#intervalValues + 1] = record.s or 0
+        record.b = record.b or bucketInterval(record.s or 0, intervalBin)
+    end
+
+    local average = calculateAverage(intervalValues)
+    local variance = calculateVariance(intervalValues, average)
+    local robust = calculateRobustStats(intervalValues)
+    local coefficientVariation = average > 0 and (math.sqrt(variance) / average) or 1
+    local buckets, bucketCounts, intervalCount = buildBucketSummary(intervals, intervalBin)
+    local globalEntropy = calculateEntropyFromCounts(bucketCounts, intervalCount)
+
+    local rolling = {}
+    local rollingWindows = timingSettings.rollingWindows or { 5, 10, 20 }
+    local lowestRollingEntropy = 1
+    for _, windowSize in ipairs(rollingWindows) do
+        local entropy = calculateRollingEntropy(intervals, windowSize, intervalBin)
+        rolling["w" .. tostring(windowSize)] = entropy
+        if entropy < lowestRollingEntropy then
+            lowestRollingEntropy = entropy
+        end
+    end
+
+    local phases, cadenceSwitches, cadencePhaseDuration =
+        buildCadencePhases(intervals, timingSettings.minPhaseLength or 3)
+    local anchorTime = candidate.lastSeen or Util.GetNow()
+    local windowSummaries = {}
+    for _, seconds in ipairs(timingSettings.featureWindows or { 600, 1800, 7200 }) do
+        windowSummaries["w" .. tostring(seconds)] = buildWindowSummary(intervals, seconds, intervalBin, anchorTime)
+    end
+
+    local timing = candidate.timing
+    timing.averageInterval = average
+    timing.intervalVariance = variance
+    timing.coefficientVariation = coefficientVariation
+    timing.medianInterval = robust.median
+    timing.madInterval = robust.mad
+    timing.iqrInterval = robust.iqr
+    timing.robustCoefficientVariation = robust.robustCoefficientVariation
+    timing.globalEntropy = globalEntropy
+    timing.rollingEntropy = rolling
+    timing.lowestRollingEntropy = lowestRollingEntropy
+    timing.dominantBuckets = buckets
+    timing.cadencePhases = phases
+    timing.cadenceSwitchCount = cadenceSwitches
+    timing.cadencePhaseDuration = cadencePhaseDuration
+    timing.windowSummaries = windowSummaries
+    timing.cadenceClass = classifyCadence(timing, candidate.behavior)
+    timing.intervalConsistency = timing.cadenceClass
+
+    local content = candidate.content
+    local templateTotal = content.templateTotal or candidate.totalMessages or 0
+    local topTemplateCount = 0
+    local uniqueTemplates = 0
+    for _, count in pairs(content.templateCounts or {}) do
+        uniqueTemplates = uniqueTemplates + 1
+        if count > topTemplateCount then
+            topTemplateCount = count
+        end
+    end
+
+    local topShingleCount = 0
+    local uniqueShingles = 0
+    for _, count in pairs(content.shingleCounts or {}) do
+        uniqueShingles = uniqueShingles + 1
+        if count > topShingleCount then
+            topShingleCount = count
+        end
+    end
+
+    local topIntentCount = 0
+    for _, count in pairs(content.adIntentCounts or {}) do
+        if count > topIntentCount then
+            topIntentCount = count
+        end
+    end
+
+    content.uniqueTemplateCount = uniqueTemplates
+    content.templateReusePercent = templateTotal > 0 and (topTemplateCount / templateTotal * 100) or 0
+    content.uniqueTemplateRatio = templateTotal > 0 and (uniqueTemplates / templateTotal) or 0
+    content.uniqueShingleCount = uniqueShingles
+    content.shingleReusePercent = (content.shingleTotal or 0) > 0 and (topShingleCount / content.shingleTotal * 100)
+        or 0
+    content.dominantIntentPercent = (content.adIntentTotal or 0) > 0 and (topIntentCount / content.adIntentTotal * 100)
+        or 0
+
+    local now = Util.GetNow()
+    local firstSeen = candidate.firstSeen or now
+    local lastSeen = candidate.lastSeen or now
+    local behavior = candidate.behavior
+    behavior.activeSpan = math.max(0, lastSeen - firstSeen)
+    behavior.postsPerHour = behavior.activeSpan > 0 and ((candidate.totalMessages or 0) / (behavior.activeSpan / 3600))
+        or (candidate.totalMessages or 0)
+    local currentRunSpan = math.max(60, (behavior.currentRunLast or now) - (behavior.currentRunStart or now))
+    behavior.activeSessionPostsPerHour = ((behavior.currentRunCount or 0) / (currentRunSpan / 3600))
+
+    if BBT.Storage and BBT.Storage.GetBaselineComparison then
+        candidate.baseline = BBT.Storage.GetBaselineComparison(candidate)
+    end
+end
+
+function Scoring.HasMeaningfulLocalEvidence(candidate, settings)
+    settings = settings or {}
+    local promotion = settings.promotion or {}
+    local messageCount = candidate.totalMessages or 0
+    local content = candidate.content or {}
+    local timing = candidate.timing or {}
+    local behavior = candidate.behavior or {}
+    local baseline = candidate.baseline or {}
+    local intervalCount = timing.intervalCount or #(timing.intervals or {})
+    local topBucket = timing.dominantBuckets and timing.dominantBuckets[1]
+    local activeSpan = behavior.activeSpan or 0
+
+    if messageCount >= (promotion.messageCount or 3) then
+        if (content.templateReusePercent or 0) >= (promotion.templateReusePercent or 67) then
+            return true
+        end
+        if (content.nearDuplicateCount or 0) >= (promotion.nearDuplicateClusterCount or 3) then
+            return true
+        end
+        if (content.shingleReusePercent or 0) >= (promotion.shingleReusePercent or 67) then
+            return true
+        end
+    end
+
+    if
+        messageCount >= (promotion.timingSampleCount or 4) + 1
+        and intervalCount >= (promotion.timingSampleCount or 4)
+        and topBucket
+        and (topBucket.percent or 0) >= 75
+        and ((timing.lowestRollingEntropy or 1) <= 0.40 or (timing.robustCoefficientVariation or 1) <= 0.18)
+    then
+        return true
+    end
+
+    if
+        messageCount >= (promotion.highVolumeCount or 6)
+        and activeSpan <= (promotion.highVolumeWindowSeconds or 600)
+    then
+        if
+            (content.adIntentTotal or 0) >= 3
+            or (content.dominantIntentPercent or 0) >= 50
+            or (content.uniqueTemplateRatio or 1) <= 0.5
+            or (baseline.postsPerHourPercentile or 0) >= 90
+        then
+            return true
+        end
+    end
+
+    return false
+end
+
 function Scoring.Recalculate(candidate, settings)
     if type(candidate) ~= "table" then
         return nil
@@ -326,163 +828,56 @@ function Scoring.Recalculate(candidate, settings)
     settings = settings or {}
     Scoring.UpdateMetrics(candidate, settings)
 
-    local score = 0
-    local reasons = {}
-    local timing = candidate.timing or {}
-    local content = candidate.content or {}
-    local behavior = candidate.behavior or {}
-    local network = candidate.network or {}
-    local networkSummary = network.summary or {}
-
-    local intervalCount = timing.intervalCount or #(timing.intervals or {})
-    local topBucket = timing.dominantBuckets and timing.dominantBuckets[1]
-    local topBucketPercent = topBucket and topBucket.percent or 0
-    local rollingEntropy = timing.lowestRollingEntropy or 1
-    local globalEntropy = timing.globalEntropy or 1
-    local cv = timing.coefficientVariation or 1
-
-    if intervalCount >= 4 then
-        if rollingEntropy <= 0.20 then
-            score = score + 16
-            addReason(reasons, "Recent posting windows have very low interval entropy.")
-        elseif rollingEntropy <= 0.40 then
-            score = score + 11
-            addReason(reasons, "Recent posting windows show regular timing.")
-        elseif rollingEntropy <= 0.60 then
-            score = score + 6
-        end
-
-        if topBucketPercent >= 75 then
-            score = score + 12
-            addReason(
-                reasons,
-                string.format(
-                    "%d%% of intervals fall near %ds.",
-                    math.floor(topBucketPercent + 0.5),
-                    topBucket.bucket or 0
-                )
-            )
-        elseif topBucketPercent >= 55 then
-            score = score + 8
-            addReason(
-                reasons,
-                string.format("%d%% of intervals share one cadence.", math.floor(topBucketPercent + 0.5))
-            )
-        end
-
-        if cv <= 0.08 then
-            score = score + 8
-            addReason(
-                reasons,
-                string.format(
-                    "Average interval %ds with very low variation.",
-                    math.floor((timing.averageInterval or 0) + 0.5)
-                )
-            )
-        elseif cv <= 0.18 then
-            score = score + 5
-        end
-
-        if globalEntropy <= 0.35 then
-            score = score + 5
-        end
-
-        if (timing.cadenceSwitchCount or 0) > 0 and rollingEntropy <= 0.45 then
-            score = score + math.min(6, timing.cadenceSwitchCount * 3)
-            addReason(reasons, "Cadence changed between stable posting schedules.")
-        end
-    end
-
-    local templateReuse = content.templateReusePercent or 0
-    if (candidate.totalMessages or 0) >= 3 then
-        if templateReuse >= 80 then
-            score = score + 18
-            addReason(
-                reasons,
-                string.format("%d%% of messages match the top template.", math.floor(templateReuse + 0.5))
-            )
-        elseif templateReuse >= 60 then
-            score = score + 13
-            addReason(reasons, "Most messages reuse the same template.")
-        elseif templateReuse >= 40 then
-            score = score + 7
-        end
-
-        local nearDuplicateRate = (candidate.totalMessages or 0) > 0
-                and ((content.nearDuplicateCount or 0) / candidate.totalMessages * 100)
-            or 0
-        if nearDuplicateRate >= 60 then
-            score = score + 10
-            addReason(reasons, string.format("%d near-duplicate messages observed.", content.nearDuplicateCount or 0))
-        elseif nearDuplicateRate >= 30 then
-            score = score + 5
-        end
-    end
-
-    if (behavior.activeSpan or 0) >= 3600 then
-        score = score + 8
-        addReason(reasons, "Posting pattern spans more than an hour.")
-    elseif (behavior.activeSpan or 0) >= 1800 then
-        score = score + 5
-    end
-
-    if (behavior.postsPerHour or 0) >= 20 then
-        score = score + 6
-        addReason(reasons, string.format("%.1f posts per hour observed.", behavior.postsPerHour or 0))
-    elseif (behavior.postsPerHour or 0) >= 10 then
-        score = score + 3
-    end
-
-    local dayCount = Util.CountMap(candidate.daysSeen)
-    if dayCount >= 3 then
-        score = score + 8
-        addReason(reasons, string.format("Observed on %d separate days.", dayCount))
-    elseif dayCount >= 2 then
-        score = score + 4
-    end
-
-    if (behavior.burstCount or 0) >= 2 then
-        score = score + 4
-        addReason(reasons, string.format("%d burst windows detected.", behavior.burstCount or 0))
-    end
-
-    local peerCount = network.peerCount or 0
-    local networkBonus = math.min(12, peerCount * 4)
-    if peerCount >= 2 then
-        if (networkSummary.averageRollingEntropy or 1) <= 0.40 then
-            networkBonus = networkBonus + 4
-        end
-        if (networkSummary.averageTemplateReusePercent or 0) >= 60 then
-            networkBonus = networkBonus + 4
-        end
-        if (networkSummary.messageCount or 0) >= 20 then
-            networkBonus = networkBonus + 3
-        end
-        if (networkSummary.cadenceSwitchCount or 0) > 0 then
-            networkBonus = networkBonus + 2
-        end
-    end
-    networkBonus = math.min(24, networkBonus)
-    if peerCount >= 2 then
-        addReason(reasons, string.format("Seen by %d peers in the sync channel.", peerCount))
-    end
+    local weightedReasons = {}
+    local familyScores = {
+        timing = scoreTiming(candidate, weightedReasons),
+        content = scoreContent(candidate, weightedReasons),
+        activity = scoreActivity(candidate, weightedReasons),
+        persistence = scorePersistence(candidate, weightedReasons),
+        baseline = scoreBaseline(candidate, weightedReasons),
+    }
+    local familyCount = countEvidenceFamilies(familyScores)
+    local rawLocalScore = familyScores.timing
+        + familyScores.content
+        + familyScores.activity
+        + familyScores.persistence
+        + familyScores.baseline
 
     local recencyFactor = getRecencyFactor(candidate)
     if recencyFactor < 1 then
-        score = score * recencyFactor
-        networkBonus = networkBonus * recencyFactor
-        addReason(reasons, "Older evidence has been decayed in the score.")
+        rawLocalScore = rawLocalScore * recencyFactor
+        addWeightedReason(weightedReasons, 1, "Older evidence has been decayed in the score.")
     end
 
-    local confidence = calculateConfidence(candidate)
-    local localScore = Util.Clamp(score, 0, 100)
-    local networkAdjustedScore = Util.Clamp(score + networkBonus, 0, 100)
+    local localScore = Util.Clamp(rawLocalScore, 0, 100)
+    local confidence = calculateConfidence(candidate, familyCount)
+    local network = candidate.network or {}
+    local networkContext = calculateNetworkContext(network)
+    local networkOnly = (candidate.totalMessages or 0) == 0 and (network.peerCount or 0) > 0
+    local displayScore = networkOnly and networkContext.score or localScore
+    local meaningful = Scoring.HasMeaningfulLocalEvidence(candidate, settings)
+    local tier = networkOnly and "Preliminary" or getTier(localScore, confidence, familyCount, familyScores, meaningful)
+    local reasons = finalizeReasons(weightedReasons)
+
+    candidate.features = {
+        version = FEATURE_VERSION,
+        updatedAt = Util.GetNow(),
+        familyScores = familyScores,
+        familyCount = familyCount,
+        rawLocalScore = rawLocalScore,
+        meaningfulLocalEvidence = meaningful,
+    }
 
     candidate.score = {
         localScore = localScore,
-        networkAdjustedScore = networkAdjustedScore,
-        tier = getTier(networkAdjustedScore, confidence),
-        confidence = confidence,
+        displayScore = displayScore,
+        networkAdjustedScore = displayScore,
+        networkScore = networkContext.score,
+        networkConfidence = networkContext.confidence,
+        tier = tier,
+        confidence = networkOnly and 0 or confidence,
+        evidenceFamilyCount = familyCount,
+        familyScores = familyScores,
         reasons = reasons,
         updatedAt = Util.GetNow(),
     }
