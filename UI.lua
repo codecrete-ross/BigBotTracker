@@ -1556,7 +1556,7 @@ local function createStatusStrip(parent)
 
     local sync = createFont(statusFrame, "OVERLAY", "GameFontHighlightSmall", "LEFT", statusFrame, "LEFT", 308, 0)
     sync:SetWidth(420)
-    sync:SetText("Sync: Unknown")
+    sync:SetText("Sync: Off")
     parent.syncStatusText = sync
 
     local hint = createFont(statusFrame, "OVERLAY", "GameFontDisableSmall", "RIGHT", statusFrame, "RIGHT", -8, 0)
@@ -1568,8 +1568,9 @@ local function createStatusStrip(parent)
     bindTooltip(statusFrame, "Live Scanner Status", function()
         return {
             "The report refreshes while this window is open.",
-            "Sync shares compact evidence summaries only, not raw chat text.",
-            "Current sync state: " .. tostring(BBT.Sync and BBT.Sync.status or "Unknown"),
+            "Sync uses hidden guild/group addon channels.",
+            "Big Bot Tracker never joins a custom chat channel.",
+            "Current sync state: " .. tostring(BBT.Sync and BBT.Sync.status or "Off"),
         }
     end)
 end
@@ -1608,21 +1609,17 @@ local function createControls(parent)
     end)
     bindTooltip(export, "Export Debug Summary", { "Stores a compact debug summary in SavedVariables." })
 
-    local sync = createButton(parent, "Toggle Sync", 104, 22)
+    local sync = createButton(parent, "Sync", 72, 22)
     sync:SetPoint("LEFT", export, "RIGHT", 8, 0)
     sync:SetScript("OnClick", function()
         local settings = Storage.GetSettings()
-        settings.sync.enabled = not settings.sync.enabled
-        if settings.sync.enabled then
-            BBT.Sync.JoinChannel()
-            Util.Print("Sync enabled.")
-        else
-            BBT.Sync.status = "Disabled"
-            Util.Print("Sync disabled.")
-        end
+        BBT.Sync.SetEnabled(not settings.sync.enabled)
         UI.Refresh()
     end)
-    bindTooltip(sync, "Toggle Sync", { "Enable or disable evidence capsule sharing with other users." })
+    bindTooltip(sync, "Sync", {
+        "Enable or disable evidence capsule sharing with guild or group members.",
+        "Does not join a custom chat channel.",
+    })
 
     local purgeAll = createButton(parent, "Purge All", 88, 22)
     purgeAll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -OUTER_MARGIN, 16)
@@ -1804,7 +1801,7 @@ function UI.UpdateStatus()
         frame.trackedStatusText:SetText("Tracked: " .. tostring(#tracked))
     end
     if frame.syncStatusText then
-        frame.syncStatusText:SetText("Sync: " .. tostring(BBT.Sync and BBT.Sync.status or "Unknown"))
+        frame.syncStatusText:SetText("Sync: " .. tostring(BBT.Sync and BBT.Sync.status or "Off"))
     end
 end
 

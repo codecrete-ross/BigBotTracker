@@ -18,12 +18,13 @@ local DEFAULT_DB = {
     settings = {
         debug = false,
         sync = {
-            enabled = true,
+            enabled = false,
             firstRunNoticeShown = false,
-            channelName = "BigBotTracker",
-            prefix = "BigBotTrack",
+            includeGuild = true,
+            includeGroup = true,
             sendInterval = 12,
             candidateCooldown = 90,
+            maxQueueSize = 30,
             maxCapsuleAgeSeconds = 30 * 86400,
         },
         promotion = {
@@ -290,6 +291,9 @@ function Storage.Initialize()
     else
         Util.MergeDefaults(BigBotTrackerDB, DEFAULT_DB)
     end
+
+    BigBotTrackerDB.settings.sync.channelName = nil
+    BigBotTrackerDB.settings.sync.prefix = nil
 
     BBT.DB = BigBotTrackerDB
     BBT.runtime = BBT.runtime or {}

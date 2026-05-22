@@ -21,16 +21,15 @@ local function handleSlashCommand(message)
     end
 
     if message == "sync on" then
-        BBT.Storage.GetSettings().sync.enabled = true
-        BBT.Sync.JoinChannel()
-        BBT.Util.Print("Sync enabled.")
+        BBT.Storage.GetSettings().sync.firstRunNoticeShown = true
+        BBT.Sync.SetEnabled(true)
+        BBT.Util.Print("Sync enabled over hidden guild/group addon channels.")
         return
     end
 
     if message == "sync off" then
-        BBT.Storage.GetSettings().sync.enabled = false
-        BBT.Sync.status = "Disabled"
-        BBT.Util.Print("Sync disabled.")
+        BBT.Sync.SetEnabled(false)
+        BBT.Util.Print("Network sync is disabled.")
         return
     end
 
@@ -48,11 +47,7 @@ local function handleSlashCommand(message)
 
     local channelName = message:match("^channel%s+(.+)$")
     if channelName and channelName ~= "" then
-        BBT.Storage.GetSettings().sync.channelName = channelName
-        if BBT.Storage.GetSettings().sync.enabled then
-            BBT.Sync.JoinChannel()
-        end
-        BBT.Util.Print("Sync channel set to " .. channelName .. ".")
+        BBT.Util.Print("Custom sync channels are not used. Sync runs through hidden guild/group addon channels.")
         return
     end
 
@@ -78,7 +73,7 @@ local function handleSlashCommand(message)
     end
 
     BBT.Util.Print(
-        "Commands: /bbt, /bbt status, /bbt sync on|off, /bbt channel NAME, /bbt monitor trade|services on|off, /bbt export, /bbt clear buffers, /bbt debug on|off"
+        "Commands: /bbt, /bbt status, /bbt sync on|off, /bbt monitor trade|services on|off, /bbt export, /bbt clear buffers, /bbt debug on|off"
     )
 end
 
@@ -121,7 +116,6 @@ local function onPlayerLogin()
     if BBT.Sync and BBT.Sync.Start then
         BBT.Sync.Start()
     end
-    BBT.Util.Print("Loaded. Open the report with /bbt.")
 end
 
 frame:SetScript("OnEvent", function(_, event, ...)

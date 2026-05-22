@@ -227,6 +227,27 @@ function _G.UnitExists()
     return false
 end
 
+local fakeInGuild = true
+local fakeInGroup = false
+local fakeInRaid = false
+local fakeInInstanceGroup = false
+_G.LE_PARTY_CATEGORY_INSTANCE = 2
+
+function _G.IsInGuild()
+    return fakeInGuild
+end
+
+function _G.IsInGroup(category)
+    if category == _G.LE_PARTY_CATEGORY_INSTANCE then
+        return fakeInInstanceGroup
+    end
+    return fakeInGroup
+end
+
+function _G.IsInRaid()
+    return fakeInRaid
+end
+
 _G.Enum = {
     ReportType = {
         Chat = 0,
@@ -237,6 +258,12 @@ _G.Enum = {
     },
     ReportMinorCategory = {
         Botting = 128,
+    },
+    RegisterAddonMessagePrefixResult = {
+        Success = 0,
+    },
+    SendAddonMessageResult = {
+        Success = 0,
     },
 }
 
@@ -268,8 +295,26 @@ _G.PlayerLocation = {
 }
 
 _G.C_ChatInfo = {
+    registeredAddonPrefixes = {},
+    sentAddonMessages = {},
     IsValidChatLine = function(lineID)
         return lineID ~= nil
+    end,
+    IsAddonMessagePrefixRegistered = function(prefix)
+        return _G.C_ChatInfo.registeredAddonPrefixes[prefix] == true
+    end,
+    RegisterAddonMessagePrefix = function(prefix)
+        _G.C_ChatInfo.registeredAddonPrefixes[prefix] = true
+        return Enum.RegisterAddonMessagePrefixResult.Success
+    end,
+    SendAddonMessage = function(prefix, message, chatType, target)
+        _G.C_ChatInfo.sentAddonMessages[#_G.C_ChatInfo.sentAddonMessages + 1] = {
+            prefix = prefix,
+            message = message,
+            chatType = chatType,
+            target = target,
+        }
+        return Enum.SendAddonMessageResult.Success
     end,
 }
 
@@ -345,6 +390,7 @@ loadModule("Report.lua")
 loadModule("UI.lua")
 
 BBT.Storage.Initialize()
+BBT.Sync.Initialize()
 BBT.UI.Create()
 
 local function countSpecialFrame(name)
@@ -829,6 +875,27 @@ local rejectedCapsule = BBT.Sync.ParseCapsule("C|2|" .. string.rep("x", 260), "P
 assertEqual(rejectedCapsule, nil, "oversized sync packet should reject")
 rejectedCapsule = BBT.Sync.ParseCapsule("C|1|Bad-Area52", "Peer-Area52")
 assertEqual(rejectedCapsule, nil, "wrong sync protocol should reject")
+local joinedCustomChannel = false
+_G.JoinTemporaryChannel = function()
+    joinedCustomChannel = true
+end
+_G.GetChannelName = function()
+    return 0
+end
+_G.C_ChatInfo.sentAddonMessages = {}
+fakeInGuild = true
+fakeInGroup = false
+fakeInRaid = false
+fakeInInstanceGroup = false
+BBT.Sync.SetEnabled(true)
+BBT.Sync.QueueCandidate(seller)
+BBT.Sync.SendNext()
+assertEqual(#_G.C_ChatInfo.sentAddonMessages, 1, "sync should send one hidden addon message")
+assertEqual(_G.C_ChatInfo.sentAddonMessages[1].prefix, "BigBotTrack", "sync prefix")
+assertEqual(_G.C_ChatInfo.sentAddonMessages[1].chatType, "GUILD", "sync should use hidden guild transport")
+assertEqual(_G.C_ChatInfo.sentAddonMessages[1].target, nil, "sync should not target a custom channel")
+assertEqual(joinedCustomChannel, false, "sync should not join custom chat channels")
+BBT.Sync.SetEnabled(false)
 local futureCandidate, futureReason = BBT.Storage.MergeNetworkEvidence({
     peerId = "peer-future",
     fullName = "Future-Area52",

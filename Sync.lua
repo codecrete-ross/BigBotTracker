@@ -18,12 +18,135 @@ local OBSERVATION_WINDOW_SECONDS = 1800
 Sync.queue = Sync.queue or {}
 Sync.queued = Sync.queued or {}
 Sync.lastSendAt = Sync.lastSendAt or 0
-Sync.channelId = Sync.channelId or nil
-Sync.status = Sync.status or "Not started"
+Sync.status = Sync.status or "Off"
 
 local function getSettings()
     local settings = Storage.GetSettings()
     return settings.sync
+end
+
+local function sanitizeSettings()
+    local settings = getSettings()
+    settings.channelName = nil
+    settings.prefix = nil
+    settings.includeGuild = settings.includeGuild ~= false
+    settings.includeGroup = settings.includeGroup ~= false
+    settings.sendInterval = tonumber(settings.sendInterval) or 12
+    settings.candidateCooldown = tonumber(settings.candidateCooldown) or 90
+    settings.maxQueueSize = tonumber(settings.maxQueueSize) or 30
+    return settings
+end
+
+local function isEnumSuccess(enumTable, result)
+    if result == nil or result == true then
+        return true
+    end
+    if result == false then
+        return false
+    end
+    if enumTable and enumTable.Success ~= nil then
+        return result == enumTable.Success
+    end
+    return true
+end
+
+local function ensurePrefixRegistered()
+    if not C_ChatInfo or type(C_ChatInfo.RegisterAddonMessagePrefix) ~= "function" then
+        Sync.status = "Addon channel API unavailable"
+        return false
+    end
+
+    if type(C_ChatInfo.IsAddonMessagePrefixRegistered) == "function" then
+        local ok, registered = pcall(C_ChatInfo.IsAddonMessagePrefixRegistered, PREFIX)
+        if ok and registered then
+            Sync.prefixRegistered = true
+            return true
+        end
+    end
+
+    local ok, result1, result2 = pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
+    if not ok then
+        Sync.status = "Addon prefix registration failed"
+        return false
+    end
+
+    local result = result2 ~= nil and result2 or result1
+    Sync.prefixRegistered = isEnumSuccess(Enum and Enum.RegisterAddonMessagePrefixResult, result)
+    if not Sync.prefixRegistered then
+        Sync.status = "Addon prefix registration failed"
+    end
+    return Sync.prefixRegistered
+end
+
+local function getGroupTransport()
+    if type(IsInGroup) ~= "function" then
+        return nil
+    end
+
+    local instanceCategory = LE_PARTY_CATEGORY_INSTANCE or 2
+    if IsInGroup(instanceCategory) then
+        return "INSTANCE_CHAT"
+    end
+    if type(IsInRaid) == "function" and IsInRaid() then
+        return "RAID"
+    end
+    if IsInGroup() then
+        return "PARTY"
+    end
+    return nil
+end
+
+local function appendTransport(transports, chatType)
+    if chatType then
+        transports[#transports + 1] = chatType
+    end
+end
+
+local function formatTransports(transports)
+    local labels = {
+        GUILD = "guild",
+        PARTY = "party",
+        RAID = "raid",
+        INSTANCE_CHAT = "instance",
+    }
+    local formatted = {}
+    for _, transport in ipairs(transports or {}) do
+        formatted[#formatted + 1] = labels[transport] or transport:lower()
+    end
+    return table.concat(formatted, "/")
+end
+
+local function getEligibleTransports()
+    local settings = sanitizeSettings()
+    local transports = {}
+    if not settings.enabled then
+        return transports
+    end
+
+    if settings.includeGuild and type(IsInGuild) == "function" and IsInGuild() then
+        appendTransport(transports, "GUILD")
+    end
+
+    if settings.includeGroup then
+        appendTransport(transports, getGroupTransport())
+    end
+
+    return transports
+end
+
+local function updateStatus()
+    local settings = sanitizeSettings()
+    if not settings.enabled then
+        Sync.status = "Off"
+        return
+    end
+
+    local transports = getEligibleTransports()
+    if #transports == 0 then
+        Sync.status = "Waiting for guild/group"
+    else
+        Sync.status = "Ready: " .. formatTransports(transports)
+    end
 end
 
 local function split(value, delimiter)
@@ -190,7 +313,7 @@ function Sync.QueueCandidate(candidate)
         return
     end
 
-    local settings = getSettings()
+    local settings = sanitizeSettings()
     if not settings.enabled then
         return
     end
@@ -200,13 +323,19 @@ function Sync.QueueCandidate(candidate)
     end
 
     local now = Util.GetNow()
-    if candidate.lastSyncQueuedAt and now - candidate.lastSyncQueuedAt < (settings.candidateCooldown or 90) then
+    if candidate.lastSyncQueuedAt and now - candidate.lastSyncQueuedAt < settings.candidateCooldown then
         return
     end
 
     candidate.lastSyncQueuedAt = now
 
     if not Sync.queued[candidate.fullKey] then
+        if #Sync.queue >= settings.maxQueueSize then
+            local dropped = table.remove(Sync.queue, 1)
+            if dropped then
+                Sync.queued[dropped] = nil
+            end
+        end
         Sync.queue[#Sync.queue + 1] = candidate.fullKey
         Sync.queued[candidate.fullKey] = true
     end
@@ -221,49 +350,51 @@ local function findCandidateByFullKey(fullKey)
     return nil
 end
 
-function Sync.JoinChannel()
-    local settings = getSettings()
+function Sync.SetEnabled(enabled)
+    local settings = sanitizeSettings()
+    settings.enabled = enabled == true
     if not settings.enabled then
-        Sync.status = "Disabled"
-        return false
+        Sync.queue = {}
+        Sync.queued = {}
     end
+    updateStatus()
+end
 
-    if not JoinTemporaryChannel or not GetChannelName then
-        Sync.status = "Channel API unavailable"
-        return false
-    end
-
-    local channelName = settings.channelName or "BigBotTracker"
-    local id = GetChannelName(channelName)
-    if not id or id == 0 then
-        JoinTemporaryChannel(channelName)
-        id = GetChannelName(channelName)
-    end
-
-    if not id or id == 0 then
-        Sync.channelId = nil
-        Sync.status = "Unable to join sync channel"
-        return false
-    end
-
-    Sync.channelId = id
-    Sync.status = "Connected to " .. channelName
-    return true
+function Sync.JoinChannel()
+    sanitizeSettings()
+    updateStatus()
+    return false
 end
 
 function Sync.SendNext()
-    local settings = getSettings()
-    if not settings.enabled or not Sync.channelId or not C_ChatInfo or not C_ChatInfo.SendAddonMessage then
+    local settings = sanitizeSettings()
+    if not settings.enabled then
+        updateStatus()
+        return
+    end
+    if not C_ChatInfo or type(C_ChatInfo.SendAddonMessage) ~= "function" then
+        Sync.status = "Addon channel API unavailable"
+        return
+    end
+
+    if not ensurePrefixRegistered() then
+        return
+    end
+
+    local transports = getEligibleTransports()
+    if #transports == 0 then
+        updateStatus()
         return
     end
 
     local now = Util.GetNow()
-    if now - (Sync.lastSendAt or 0) < (settings.sendInterval or 12) then
+    if now - (Sync.lastSendAt or 0) < settings.sendInterval then
         return
     end
 
     local fullKey = table.remove(Sync.queue, 1)
     if not fullKey then
+        updateStatus()
         return
     end
 
@@ -278,20 +409,40 @@ function Sync.SendNext()
         return
     end
 
-    local ok = C_ChatInfo.SendAddonMessage(PREFIX, payload, "CHANNEL", Sync.channelId)
-    if ok == false then
-        Sync.status = "Send throttled or failed"
-    else
-        Sync.status = "Last sent " .. candidate.displayName
+    local sent = 0
+    for _, transport in ipairs(transports) do
+        local ok, result1, result2 = pcall(C_ChatInfo.SendAddonMessage, PREFIX, payload, transport)
+        local result = result2 ~= nil and result2 or result1
+        if ok and isEnumSuccess(Enum and Enum.SendAddonMessageResult, result) then
+            sent = sent + 1
+        else
+            Util.Debug("Sync send failed on " .. tostring(transport) .. ".")
+        end
+    end
+
+    if sent > 0 then
+        Sync.status = "Last sent via " .. formatTransports(transports)
         Sync.lastSendAt = now
+    else
+        Sync.status = "Send throttled or failed"
     end
 end
 
 function Sync.HandleAddonMessage(prefix, message, channel, sender)
-    if prefix ~= PREFIX then
+    local settings = sanitizeSettings()
+    if not settings.enabled or prefix ~= PREFIX then
         return
     end
     if Util.IsSelf(sender) then
+        return
+    end
+
+    local allowedChannel = channel == "GUILD"
+        or channel == "PARTY"
+        or channel == "RAID"
+        or channel == "INSTANCE_CHAT"
+        or channel == "WHISPER"
+    if not allowedChannel then
         return
     end
 
@@ -310,25 +461,24 @@ function Sync.HandleAddonMessage(prefix, message, channel, sender)
 end
 
 function Sync.ShowFirstRunNotice()
-    local settings = getSettings()
+    local settings = sanitizeSettings()
     if settings.firstRunNoticeShown then
         return
     end
 
     settings.firstRunNoticeShown = true
+    settings.enabled = false
 
     if StaticPopupDialogs and StaticPopup_Show then
         StaticPopupDialogs.BIGBOTTRACKER_SYNC_NOTICE = {
-            text = "Big Bot Tracker shares compact evidence summaries with other users in a custom addon sync channel. It does not share raw chat text. Sync is enabled by default and can be disabled in /bbt.",
-            button1 = "OK",
-            button2 = "Disable Sync",
+            text = "Big Bot Tracker can share compact evidence summaries through hidden WoW addon channels with guild or group members who also run it. It does not join custom chat channels and does not share raw chat text.",
+            button1 = "Enable Sync",
+            button2 = "Keep Local",
             OnAccept = function()
-                settings.enabled = true
-                Sync.JoinChannel()
+                Sync.SetEnabled(true)
             end,
             OnCancel = function()
-                settings.enabled = false
-                Sync.status = "Disabled"
+                Sync.SetEnabled(false)
             end,
             timeout = 0,
             whileDead = true,
@@ -337,15 +487,14 @@ function Sync.ShowFirstRunNotice()
         }
         StaticPopup_Show("BIGBOTTRACKER_SYNC_NOTICE")
     else
-        Util.Print("Sync shares compact evidence summaries, not raw chat text. Use /bbt sync off to disable.")
-        Sync.JoinChannel()
+        Sync.SetEnabled(false)
     end
 end
 
 function Sync.Initialize()
-    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-        C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
-    end
+    sanitizeSettings()
+    ensurePrefixRegistered()
+    updateStatus()
 end
 
 function Sync.Start()
@@ -353,10 +502,12 @@ function Sync.Start()
         return
     end
 
+    sanitizeSettings()
     Sync.ShowFirstRunNotice()
-    if getSettings().firstRunNoticeShown and getSettings().enabled then
-        Sync.JoinChannel()
+    if getSettings().enabled then
+        ensurePrefixRegistered()
     end
+    updateStatus()
 end
 
 function Sync.OnUpdate()

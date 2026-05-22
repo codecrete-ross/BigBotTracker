@@ -83,6 +83,12 @@ if (-not $prefixMatch.Success) {
 if ($prefixMatch.Groups[1].Value.Length -gt 16) {
     throw "Sync prefix is longer than 16 characters."
 }
+if ($syncLua -match "JoinTemporaryChannel" -or $syncLua -match "GetChannelName") {
+    throw "Sync must not join or inspect custom chat channels."
+}
+if ($syncLua -match 'SendAddonMessage\([^)]*"CHANNEL"') {
+    throw "Sync must not send addon messages over custom chat channels."
+}
 
 $coreLua = Get-Content -Path (Join-Path $projectRoot "Core.lua") -Raw
 if ($coreLua -notmatch "function BigBotTracker_OnAddonCompartmentClick") {

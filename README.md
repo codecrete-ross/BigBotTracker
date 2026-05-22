@@ -29,7 +29,7 @@ Other report controls:
 
 - `Refresh` rebuilds the visible report
 - `Export` saves a compact debug summary in SavedVariables
-- `Toggle Sync` enables or disables evidence sharing
+- `Sync` enables or disables evidence sharing
 - `Clear Buffers` clears temporary unpromoted scan buffers
 - `Purge Selected` deletes the selected candidate's saved evidence
 - `Purge All` deletes saved candidate evidence
@@ -40,7 +40,7 @@ Local scores are based on capped evidence families: timing regularity, content s
 
 The addon does not persist or sync raw chat text. Saved and synced data is compact: identity, observation ranges/windows, counts, timing summaries, template and shingle hashes, behavior summaries, score snapshots, baseline bins, hashed peer IDs, and version fields.
 
-Sync uses the `BigBotTracker` custom channel by default. On first login, a notice explains sync; `OK` keeps it enabled, and `Disable Sync` turns it off. The sync network only reaches players who can join the same custom channel, usually on the same realm or connected realm.
+Sync does not join or create custom chat channels. When enabled, it uses hidden WoW addon-message transports for guild and group members who also run Big Bot Tracker. If no guild or group transport is available, sync waits without changing the user's chat channels.
 
 ## Commands
 
@@ -48,7 +48,6 @@ Sync uses the `BigBotTracker` custom channel by default. On first login, a notic
 - `/bbt status` prints tracked candidate and sync status
 - `/bbt sync on` enables sync
 - `/bbt sync off` disables sync
-- `/bbt channel NAME` changes the custom sync channel
 - `/bbt monitor trade on|off` toggles Trade monitoring
 - `/bbt monitor services on|off` toggles Services monitoring
 - `/bbt export` writes a compact debug summary to `BigBotTrackerDB.settings.lastDebugSummary`
