@@ -50,7 +50,7 @@ function ChatScanner.GetTargetChannel(channelName, channelBaseName)
 end
 
 local function getPretrack(identity)
-    BBT.session.pretrack[identity.fullKey] = BBT.session.pretrack[identity.fullKey]
+    BBT.runtime.pretrack[identity.fullKey] = BBT.runtime.pretrack[identity.fullKey]
         or {
             identity = identity,
             firstSeen = Util.GetNow(),
@@ -62,7 +62,7 @@ local function getPretrack(identity)
             adIntentMessages = 0,
             intentCounts = {},
         }
-    return BBT.session.pretrack[identity.fullKey]
+    return BBT.runtime.pretrack[identity.fullKey]
 end
 
 local function prunePretrackMessages(entry, windowSeconds, now)
@@ -242,11 +242,11 @@ function ChatScanner.HandleChannelMessage(
         return
     end
 
-    if lineID and BBT.session.seenLines[lineID] then
+    if lineID and BBT.runtime.seenLines[lineID] then
         return
     end
     if lineID then
-        BBT.session.seenLines[lineID] = true
+        BBT.runtime.seenLines[lineID] = true
     end
 
     local now = Util.GetNow()
@@ -257,7 +257,7 @@ function ChatScanner.HandleChannelMessage(
     local shingles = Normalizer.ShingleSignature(normalized)
     local shingleKey = Normalizer.SignatureKey(shingles, 4)
     local adIntent = Normalizer.DetectAdIntent(text, normalized)
-    local sessionRecent = BBT.session.recentNormalized[identity.fullKey] or {}
+    local runtimeRecent = BBT.runtime.recentNormalized[identity.fullKey] or {}
     local nearDuplicate = false
     local similarity = 0
     local nearDuplicateMethod = nil
@@ -288,7 +288,7 @@ function ChatScanner.HandleChannelMessage(
     else
         nearDuplicate, similarity, nearDuplicateMethod = Normalizer.IsNearDuplicate(
             normalized,
-            sessionRecent,
+            runtimeRecent,
             settings.promotion.nearDuplicateThreshold,
             settings.promotion.shingleNearDuplicateThreshold,
             shingles
@@ -324,8 +324,8 @@ function ChatScanner.HandleChannelMessage(
 
     if candidate then
         Storage.RecordObservation(candidate, observation)
-        Util.PushLimited(sessionRecent, { normalized = normalized, shingles = shingles }, 10)
-        BBT.session.recentNormalized[identity.fullKey] = sessionRecent
+        Util.PushLimited(runtimeRecent, { normalized = normalized, shingles = shingles }, 10)
+        BBT.runtime.recentNormalized[identity.fullKey] = runtimeRecent
         return
     end
 
@@ -353,10 +353,10 @@ function ChatScanner.HandleChannelMessage(
     local promote, reason = shouldPromote(entry, settings, now, identity)
     if promote then
         candidate = Storage.PromoteFromPretrack(identity, entry)
-        BBT.session.pretrack[identity.fullKey] = nil
+        BBT.runtime.pretrack[identity.fullKey] = nil
         Util.Debug(string.format("Promoted %s: %s", identity.displayName, reason or "threshold"))
     end
 
-    Util.PushLimited(sessionRecent, { normalized = normalized, shingles = shingles }, 10)
-    BBT.session.recentNormalized[identity.fullKey] = sessionRecent
+    Util.PushLimited(runtimeRecent, { normalized = normalized, shingles = shingles }, 10)
+    BBT.runtime.recentNormalized[identity.fullKey] = runtimeRecent
 end

@@ -17,6 +17,13 @@ foreach ($file in $luaFiles) {
     }
 }
 
+$deployScript = Get-Content -Path (Join-Path $projectRoot "scripts\deploy.ps1") -Raw
+foreach ($file in $luaFiles) {
+    if ($deployScript -notmatch [regex]::Escape('"' + $file + '"')) {
+        throw "Deploy script does not copy TOC Lua file: $file"
+    }
+}
+
 $requiredFiles = @(
     "BigBotTracker.toc",
     "Util.lua",
@@ -25,6 +32,7 @@ $requiredFiles = @(
     "Storage.lua",
     "ChatScanner.lua",
     "Sync.lua",
+    "Report.lua",
     "UI.lua",
     "Core.lua",
     ".pkgmeta",
@@ -50,6 +58,21 @@ if ($allLuaText -match "ChatFrame_AddMessageEventFilter") {
 
 if ($allLuaText -match "SendChatMessage\(.*report") {
     throw "Addon must not automate public accusations or reports."
+}
+
+$sessionMetricPatterns = @(
+    "sessionsSeen",
+    "sessionMessages",
+    "sessionId",
+    "activeSessionPostsPerHour",
+    "ClearSessionBuffers",
+    "clear session"
+)
+
+foreach ($pattern in $sessionMetricPatterns) {
+    if ($allLuaText -match [regex]::Escape($pattern)) {
+        throw "Session-derived reporting metric is still present: $pattern"
+    }
 }
 
 $syncLua = Get-Content -Path (Join-Path $projectRoot "Sync.lua") -Raw

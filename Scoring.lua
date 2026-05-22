@@ -7,7 +7,7 @@ BBT.Scoring = BBT.Scoring or {}
 local Scoring = BBT.Scoring
 local Util = BBT.Util
 
-local FEATURE_VERSION = 2
+local FEATURE_VERSION = 3
 local LOG_2 = math.log(2)
 
 local function log2(value)
@@ -395,7 +395,6 @@ local function calculateConfidence(candidate, familyCount)
     local timing = candidate.timing or {}
     local intervalCount = timing.intervalCount or 0
     local dayCount = Util.CountMap(candidate.daysSeen)
-    local sessionCount = Util.CountMap(candidate.sessionsSeen)
     local activeWindows = 0
 
     for _, summary in pairs(timing.windowSummaries or {}) do
@@ -405,11 +404,10 @@ local function calculateConfidence(candidate, familyCount)
     end
 
     local confidence = 0
-    confidence = confidence + math.min(messageCount / 18, 1) * 28
-    confidence = confidence + math.min(intervalCount / 12, 1) * 26
-    confidence = confidence + math.min(activeWindows / 3, 1) * 12
-    confidence = confidence + math.min(dayCount / 3, 1) * 14
-    confidence = confidence + math.min(sessionCount / 2, 1) * 8
+    confidence = confidence + math.min(messageCount / 18, 1) * 30
+    confidence = confidence + math.min(intervalCount / 12, 1) * 28
+    confidence = confidence + math.min(activeWindows / 3, 1) * 14
+    confidence = confidence + math.min(dayCount / 3, 1) * 16
     confidence = confidence + math.min((familyCount or 0) / 3, 1) * 12
 
     return Util.Clamp(confidence, 0, 100)
@@ -553,7 +551,7 @@ local function scoreActivity(candidate, reasons)
     local behavior = candidate.behavior or {}
     local timing = candidate.timing or {}
     local score = 0
-    local rate = math.max(behavior.postsPerHour or 0, behavior.activeSessionPostsPerHour or 0)
+    local rate = behavior.postsPerHour or 0
 
     for _, summary in pairs(timing.windowSummaries or {}) do
         rate = math.max(rate, summary.postsPerHour or 0)
@@ -586,23 +584,18 @@ end
 local function scorePersistence(candidate, reasons)
     local score = 0
     local dayCount = Util.CountMap(candidate.daysSeen)
-    local sessionCount = Util.CountMap(candidate.sessionsSeen)
     local behavior = candidate.behavior or {}
 
     if dayCount >= 3 then
-        score = score + 5
-        addWeightedReason(reasons, 5, string.format("Observed on %d separate days.", dayCount))
+        score = score + 6
+        addWeightedReason(reasons, 6, string.format("Observed on %d separate days.", dayCount))
     elseif dayCount >= 2 then
-        score = score + 3
-    end
-
-    if sessionCount >= 2 then
-        score = score + 2
+        score = score + 4
     end
 
     if (behavior.activeSpan or 0) >= 3600 then
-        score = score + 3
-        addWeightedReason(reasons, 3, "Posting pattern spans more than an hour.")
+        score = score + 4
+        addWeightedReason(reasons, 4, "Posting pattern spans more than an hour.")
     elseif (behavior.activeSpan or 0) >= 1800 then
         score = score + 2
     end
@@ -761,8 +754,6 @@ function Scoring.UpdateMetrics(candidate, settings)
     behavior.activeSpan = math.max(0, lastSeen - firstSeen)
     behavior.postsPerHour = behavior.activeSpan > 0 and ((candidate.totalMessages or 0) / (behavior.activeSpan / 3600))
         or (candidate.totalMessages or 0)
-    local currentRunSpan = math.max(60, (behavior.currentRunLast or now) - (behavior.currentRunStart or now))
-    behavior.activeSessionPostsPerHour = ((behavior.currentRunCount or 0) / (currentRunSpan / 3600))
 
     if BBT.Storage and BBT.Storage.GetBaselineComparison then
         candidate.baseline = BBT.Storage.GetBaselineComparison(candidate)

@@ -42,6 +42,21 @@ local function makeWidget()
     function widget:SetToplevel(topLevel)
         self.topLevel = topLevel
     end
+    function widget:SetAlpha(alpha)
+        self.alpha = alpha
+    end
+    function widget:SetEnabled(enabled)
+        self.enabled = enabled
+    end
+    function widget:IsEnabled()
+        return self.enabled ~= false
+    end
+    function widget:Enable()
+        self.enabled = true
+    end
+    function widget:Disable()
+        self.enabled = false
+    end
     function widget:Raise()
         self.raised = (self.raised or 0) + 1
     end
@@ -147,6 +162,100 @@ function _G.Ambiguate(value)
     return value
 end
 
+function _G.UnitExists()
+    return false
+end
+
+_G.Enum = {
+    ReportType = {
+        Chat = 0,
+        InWorld = 1,
+    },
+    ReportMajorCategory = {
+        Cheating = 2,
+    },
+    ReportMinorCategory = {
+        Botting = 128,
+    },
+}
+
+local function makeLocation(kind, value, valid, canReport)
+    return {
+        kind = kind,
+        value = value,
+        valid = valid,
+        canReport = canReport,
+        IsValid = function(self)
+            return self.valid
+        end,
+        IsChatLineID = function(self)
+            return self.kind == "chat"
+        end,
+    }
+end
+
+_G.PlayerLocation = {
+    CreateFromGUID = function(_, guid)
+        return makeLocation("guid", guid, guid ~= "invalid-guid", guid == "reportable-guid")
+    end,
+    CreateFromChatLineID = function(_, lineID)
+        return makeLocation("chat", lineID, lineID ~= nil, true)
+    end,
+    CreateFromUnit = function(_, unit)
+        return makeLocation("unit", unit, unit == "target", unit == "target")
+    end,
+}
+
+_G.C_ChatInfo = {
+    IsValidChatLine = function(lineID)
+        return lineID ~= nil
+    end,
+}
+
+_G.C_AddOns = {
+    loaded = {},
+    LoadAddOn = function(addon)
+        _G.C_AddOns.loaded[addon] = true
+        return true
+    end,
+}
+
+_G.C_ReportSystem = {
+    CanReportPlayer = function(playerLocation)
+        return playerLocation and playerLocation.canReport == true
+    end,
+    GetMajorCategoriesForReportType = function(reportType)
+        if reportType == Enum.ReportType.InWorld then
+            return { Enum.ReportMajorCategory.Cheating }
+        end
+        return {}
+    end,
+    GetMinorCategoriesForReportTypeAndMajorCategory = function(reportType, majorCategory)
+        if reportType == Enum.ReportType.InWorld and majorCategory == Enum.ReportMajorCategory.Cheating then
+            return { Enum.ReportMinorCategory.Botting }
+        end
+        return {}
+    end,
+}
+
+_G.ReportInfo = {
+    CreateReportInfoFromType = function(_, reportType)
+        return { reportType = reportType }
+    end,
+}
+
+_G.ReportFrame = {
+    openCount = 0,
+    InitiateReport = function(self, reportInfo, playerName, playerLocation)
+        self.openCount = self.openCount + 1
+        self.lastReport = {
+            reportInfo = reportInfo,
+            playerName = playerName,
+            playerLocation = playerLocation,
+        }
+    end,
+}
+
 local function loadModule(name)
     local chunk, err = loadfile(root .. "/" .. name)
     assert(chunk, err)
@@ -171,6 +280,7 @@ loadModule("Scoring.lua")
 loadModule("Storage.lua")
 loadModule("ChatScanner.lua")
 loadModule("Sync.lua")
+loadModule("Report.lua")
 loadModule("UI.lua")
 
 BBT.Storage.Initialize()
@@ -253,11 +363,72 @@ assertTruthy(seller.timing.dominantBuckets[1], "dominant bucket exists")
 assertEqual(seller.timing.dominantBuckets[1].bucket, 120, "dominant cadence bucket")
 assertEqual(BBT.UI.GetCadenceDisplay(seller).label, "Fixed Cadence", "fixed seller cadence label")
 assertTruthy((seller.score.networkAdjustedScore or 0) >= 45, "fixed cadence should score at least medium")
-assertEqual(seller.featureVersion, 2, "seller feature version")
+assertEqual(seller.featureVersion, 3, "seller feature version")
 assertTruthy((seller.score.familyScores.timing or 0) > 0, "seller timing family score")
 assertTruthy((seller.score.familyScores.content or 0) > 0, "seller content family score")
 assertTruthy((seller.score.evidenceFamilyCount or 0) >= 2, "seller should have multiple evidence families")
 assertEqual(seller.score.tier, "High", "fixed repeated seller should reach high tier")
+assertEqual(seller.lastGuid, "guid", "seller should persist latest chat sender guid")
+assertTruthy(seller.lastLineID, "seller should persist latest chat line id")
+assertTruthy(seller.lastReportObservedAt, "seller should persist report observation timestamp")
+
+local beforeReload = {
+    localScore = seller.score.localScore,
+    confidence = seller.score.confidence,
+    tier = seller.score.tier,
+    familyCount = seller.score.evidenceFamilyCount,
+    timing = seller.score.familyScores.timing,
+    content = seller.score.familyScores.content,
+    activity = seller.score.familyScores.activity,
+    persistence = seller.score.familyScores.persistence,
+    baseline = seller.score.familyScores.baseline,
+}
+BBT.runtime = nil
+BBT.Storage.Initialize()
+assertTruthy(BBT.runtime and BBT.runtime.pretrack, "reload should recreate runtime buffers")
+seller = BBT.Storage.GetCandidate("Seller-Area52")
+assertEqual(seller.score.localScore, beforeReload.localScore, "reload should not increase local score")
+assertEqual(seller.score.confidence, beforeReload.confidence, "reload should not increase confidence")
+assertEqual(seller.score.tier, beforeReload.tier, "reload should not change tier")
+assertEqual(seller.score.evidenceFamilyCount, beforeReload.familyCount, "reload should not change family count")
+assertEqual(seller.score.familyScores.timing, beforeReload.timing, "reload should not change timing family")
+assertEqual(seller.score.familyScores.content, beforeReload.content, "reload should not change content family")
+assertEqual(seller.score.familyScores.activity, beforeReload.activity, "reload should not change activity family")
+assertEqual(seller.score.familyScores.persistence, beforeReload.persistence, "reload should not change persistence family")
+assertEqual(seller.score.familyScores.baseline, beforeReload.baseline, "reload should not change baseline family")
+
+local originalSellerTier = seller.score.tier
+BBT.UI.SelectCandidate(seller)
+local reportState = BBT.UI.GetReportControlState()
+assertEqual(reportState.reportShown, false, "botting report action should hide below Critical")
+
+seller.score.tier = "Critical"
+seller.lastGuid = "reportable-guid"
+BBT.UI.SelectCandidate(seller)
+reportState = BBT.UI.GetReportControlState()
+assertEqual(reportState.reportShown, true, "botting report action should show for Critical candidates")
+assertEqual(reportState.reportEnabled, true, "botting report action should enable for Critical candidates")
+
+local openedReport, reportDiagnostic = BBT.Report.OpenBottingReport(seller)
+assertEqual(openedReport, true, "reportable guid should open in-world botting report frame")
+assertEqual(reportDiagnostic.source, "guid", "guid should be used when target is unavailable")
+assertEqual(ReportFrame.lastReport.reportInfo.reportType, Enum.ReportType.InWorld, "report flow should use InWorld type")
+assertEqual(ReportFrame.lastReport.playerName, seller.displayName, "report frame should receive candidate name")
+assertEqual(seller.lastReportDiagnostic.canOpen, true, "candidate should retain positive report diagnostic")
+
+local reportOpenCount = ReportFrame.openCount
+seller.lastGuid = "blocked-guid"
+seller.lastLineID = 987654
+local blockedReport, blockedDiagnostic = BBT.Report.OpenBottingReport(seller)
+assertEqual(blockedReport, false, "unreportable guid should not open report frame")
+assertEqual(ReportFrame.openCount, reportOpenCount, "chat line fallback should not open report frame")
+assertEqual(blockedDiagnostic.guidCanReport, false, "blocked guid should be diagnosed")
+assertEqual(blockedDiagnostic.chatLineCanReport, true, "chat-line reportability should be diagnostic only")
+assertEqual(blockedDiagnostic.canOpen, false, "blocked guid should not be openable")
+
+seller.lastGuid = "guid"
+seller.score.tier = originalSellerTier
+BBT.UI.SelectCandidate(seller)
 
 send("Switchy-Area52", "selling raid boost pst", 120)
 send("Switchy-Area52", "selling raid boost pst", 120)
@@ -504,7 +675,7 @@ local networkCandidate = BBT.Storage.MergeNetworkEvidence({
     lastSeen = fakeNow,
     firstWindow = math.floor((fakeNow - 600) / 1800),
     lastWindow = math.floor(fakeNow / 1800),
-    featureVersion = 2,
+    featureVersion = 3,
     messageCount = 12,
     rollingEntropy = 0.2,
     globalEntropy = 0.3,
@@ -531,7 +702,7 @@ BBT.Storage.MergeNetworkEvidence({
     lastSeen = fakeNow,
     firstWindow = math.floor((fakeNow - 600) / 1800),
     lastWindow = math.floor(fakeNow / 1800),
-    featureVersion = 2,
+    featureVersion = 3,
     messageCount = 20,
     rollingEntropy = 0.1,
     globalEntropy = 0.2,
@@ -550,7 +721,7 @@ local payload = BBT.Sync.SerializeCandidate(seller)
 assertTruthy(payload and #payload <= 240, "sync capsule should stay compact")
 local capsule = BBT.Sync.ParseCapsule(payload, "Peer-Area52")
 assertTruthy(capsule, "sync capsule should parse")
-assertEqual(capsule.featureVersion, 2, "sync capsule feature version")
+assertEqual(capsule.featureVersion, 3, "sync capsule feature version")
 assertTruthy(capsule.firstWindow > 0 and capsule.lastWindow >= capsule.firstWindow, "sync capsule coarse windows")
 assertTruthy(capsule.shingleHashes, "sync capsule shingle hash table")
 local rejectedCapsule = BBT.Sync.ParseCapsule("C|2|" .. string.rep("x", 260), "Peer-Area52")
@@ -562,7 +733,7 @@ local futureCandidate, futureReason = BBT.Storage.MergeNetworkEvidence({
     fullName = "Future-Area52",
     firstSeen = fakeNow,
     lastSeen = fakeNow + 7200,
-    featureVersion = 2,
+    featureVersion = 3,
 })
 assertEqual(futureCandidate, nil, "future network evidence should reject")
 assertEqual(futureReason, "future", "future network rejection reason")
@@ -571,7 +742,7 @@ local staleCandidate, staleReason = BBT.Storage.MergeNetworkEvidence({
     fullName = "Stale-Area52",
     firstSeen = fakeNow - (40 * 86400),
     lastSeen = fakeNow - (40 * 86400),
-    featureVersion = 2,
+    featureVersion = 3,
 })
 assertEqual(staleCandidate, nil, "stale network evidence should reject")
 assertEqual(staleReason, "stale", "stale network rejection reason")
@@ -592,7 +763,6 @@ local baselineOnly = {
     realmKey = "area52",
     channels = { trade = 1 },
     daysSeen = {},
-    sessionsSeen = {},
     totalMessages = 1,
     firstSeen = fakeNow,
     lastSeen = fakeNow,
@@ -606,9 +776,96 @@ BBT.Storage.GetBaselineComparison = originalBaseline
 assertTruthy((baselineOnly.score.networkAdjustedScore or 0) < 70, "baseline-only score should stay below high")
 assertEqual(baselineOnly.score.tier, "Insufficient Data", "baseline-only evidence should not tier up")
 
+local function makeConfidenceCandidate(dayCount)
+    local baseTime = fakeNow + 10000
+    local intervals = {}
+    for index = 1, 12 do
+        intervals[index] = {
+            t = baseTime + (index * 120),
+            s = 120,
+            b = 120,
+        }
+    end
+
+    local daysSeen = {}
+    for index = 1, dayCount do
+        daysSeen["day-" .. tostring(index)] = true
+    end
+
+    return {
+        displayName = "ConfidenceFixture-Area52",
+        fullKey = "confidencefixture-area52",
+        realmKey = "area52",
+        channels = { trade = 1 },
+        daysSeen = daysSeen,
+        totalMessages = 18,
+        firstSeen = baseTime,
+        lastSeen = baseTime + 1440,
+        timing = {
+            intervals = intervals,
+            intervalCount = 12,
+        },
+        content = {
+            templateCounts = { fixed = 18 },
+            templateTotal = 18,
+            shingleCounts = { fixed = 18 },
+            shingleTotal = 18,
+            adIntentCounts = { boost = 18 },
+            adIntentTotal = 18,
+            nearDuplicateCount = 18,
+        },
+        behavior = {
+            burstCount = 2,
+            longestActiveSpan = 1800,
+        },
+        network = {},
+    }
+end
+
+local oneDayConfidence = makeConfidenceCandidate(1)
+BBT.Scoring.Recalculate(oneDayConfidence, BBT.Storage.GetSettings())
+assertTruthy(oneDayConfidence.score.confidence < 90, "one-day confidence should stay below 90")
+
+local threeDayConfidence = makeConfidenceCandidate(3)
+BBT.Scoring.Recalculate(threeDayConfidence, BBT.Storage.GetSettings())
+assertEqual(threeDayConfidence.score.confidence, 100, "three-day maxed evidence can reach 100 confidence")
+
 local passiveRefreshCount = BBT.UI.GetRefreshCount()
 BBT.UI.OnUpdate(0.51)
 BBT.UI.OnUpdate(5)
 assertTruthy(BBT.UI.GetRefreshCount() > passiveRefreshCount, "visible UI should refresh passively")
+
+BBT.runtime.pretrack.fixture = true
+BBT.runtime.recentNormalized.fixture = true
+BBT.runtime.seenLines[12345] = true
+BBT.runtime.baselineSampled.fixture = true
+BBT.Storage.ClearRuntimeBuffers()
+assertEqual(next(BBT.runtime.pretrack), nil, "clear buffers should empty pretrack")
+assertEqual(next(BBT.runtime.recentNormalized), nil, "clear buffers should empty recent normalized cache")
+assertEqual(next(BBT.runtime.seenLines), nil, "clear buffers should empty line dedupe cache")
+assertEqual(next(BBT.runtime.baselineSampled), nil, "clear buffers should empty baseline cooldown cache")
+
+BigBotTrackerDB = {
+    schemaVersion = 2,
+    candidates = {
+        area52 = {
+            old = {
+                displayName = "Old-Area52",
+            },
+        },
+    },
+    sessions = {
+        old = {
+            startedAt = fakeNow,
+        },
+    },
+}
+BBT.DB = BigBotTrackerDB
+BBT.runtime = nil
+BBT.Storage.Initialize()
+assertEqual(BigBotTrackerDB.schemaVersion, 3, "schema clean cutover should install current schema")
+assertEqual(next(BigBotTrackerDB.candidates), nil, "schema clean cutover should clear old candidates")
+assertEqual(BigBotTrackerDB.sessions, nil, "schema clean cutover should not keep saved sessions")
+assertTruthy(BBT.runtime and BBT.runtime.pretrack, "schema clean cutover should recreate runtime buffers")
 
 print("Lua fixture tests passed.")

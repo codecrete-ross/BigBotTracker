@@ -7,6 +7,7 @@ BBT.UI = BBT.UI or {}
 local UI = BBT.UI
 local Util = BBT.Util
 local Storage = BBT.Storage
+local Report = BBT.Report
 
 local FRAME_NAME = "BigBotTrackerFrame"
 local FRAME_WIDTH = 1180
@@ -25,6 +26,8 @@ local TABLE_TOP = -150
 local DETAIL_TITLE_TOP = -430
 local DETAIL_TOP = -466
 local REASONS_TOP = DETAIL_TOP - 250
+local DETAIL_TITLE_MAX_WIDTH = 520
+local DETAIL_TITLE_BUTTON_GAP = 12
 
 local frame
 local tableScroll
@@ -606,12 +609,71 @@ local function showCandidateTooltip(owner)
     GameTooltip:Show()
 end
 
+local function setButtonEnabled(button, enabled)
+    if not button then
+        return
+    end
+
+    button.enabled = enabled
+    if button.SetEnabled then
+        button:SetEnabled(enabled)
+    elseif enabled and button.Enable then
+        button:Enable()
+    elseif not enabled and button.Disable then
+        button:Disable()
+    end
+    if button.SetAlpha then
+        button:SetAlpha(enabled and 1 or 0.45)
+    end
+end
+
+local function updateReportControls(candidate)
+    local isCritical = Report and Report.IsCriticalCandidate and Report.IsCriticalCandidate(candidate)
+
+    if detail.reportButton then
+        setShown(detail.reportButton, isCritical)
+        setButtonEnabled(detail.reportButton, isCritical)
+    end
+end
+
+local function getTitleTextWidth()
+    if detail.title and detail.title.GetStringWidth then
+        local ok, width = pcall(detail.title.GetStringWidth, detail.title)
+        if ok and type(width) == "number" and width > 0 then
+            return math.min(math.ceil(width), DETAIL_TITLE_MAX_WIDTH)
+        end
+    end
+
+    if detail.title and detail.title.GetText then
+        local ok, text = pcall(detail.title.GetText, detail.title)
+        if ok and type(text) == "string" and text ~= "" then
+            return math.min(#text * 8, DETAIL_TITLE_MAX_WIDTH)
+        end
+    end
+
+    return 160
+end
+
+local function positionReportButton()
+    if not detail.title or not detail.reportButton then
+        return
+    end
+
+    local titleWidth = getTitleTextWidth()
+    detail.title:SetWidth(titleWidth)
+    if detail.reportButton.ClearAllPoints then
+        detail.reportButton:ClearAllPoints()
+    end
+    detail.reportButton:SetPoint("LEFT", detail.title, "LEFT", titleWidth + DETAIL_TITLE_BUTTON_GAP, 0)
+end
+
 local function clearDetails()
     selectedCandidate = nil
     selectedKey = nil
 
     if detail.title then
         detail.title:SetText("Candidate Detail")
+        positionReportButton()
     end
     if detail.subtitle then
         detail.subtitle:SetText("Select a row to view structured local and network evidence.")
@@ -628,6 +690,8 @@ local function clearDetails()
             line:SetText("")
         end
     end
+
+    updateReportControls(nil)
 end
 
 local function setGroupLine(groupName, index, label, value)
@@ -676,6 +740,7 @@ local function refreshDetails(candidate)
     end
 
     detail.title:SetText(candidate.displayName or "Candidate Detail")
+    positionReportButton()
     detail.subtitle:SetText("Evidence is based on monitored chat behavior. It is suspicion, not proof.")
 
     setGroupLine("summary", 1, "Tier", score.tier or "Insufficient Data")
@@ -686,12 +751,7 @@ local function refreshDetails(candidate)
     setGroupLine("activity", 1, "First Seen", Util.FormatTimestamp(candidate.firstSeen))
     setGroupLine("activity", 2, "First Suspected", Util.FormatTimestamp(candidate.firstPromoted))
     setGroupLine("activity", 3, "Last Seen", Util.FormatTimestamp(candidate.lastSeen))
-    setGroupLine(
-        "activity",
-        4,
-        "Messages",
-        string.format("%d total, %d this session", candidate.totalMessages or 0, candidate.sessionMessages or 0)
-    )
+    setGroupLine("activity", 4, "Messages", tostring(candidate.totalMessages or 0))
     setGroupLine("activity", 5, "Channels", #channels > 0 and table.concat(channels, ", ") or "-")
 
     setGroupLine("timing", 1, "Cadence", cadence.label)
@@ -740,6 +800,40 @@ local function refreshDetails(candidate)
             line:SetText(index == 1 and "No strong evidence reasons yet." or "")
         end
     end
+
+    updateReportControls(candidate)
+end
+
+function UI.GetSelectedCandidate()
+    return selectedCandidate
+end
+
+function UI.SelectCandidate(candidate)
+    if candidate then
+        selectedCandidate = candidate
+        selectedKey = candidate.fullKey
+        refreshDetails(candidate)
+    else
+        clearDetails()
+    end
+    updateAllRowVisuals()
+end
+
+local function buttonIsShown(button)
+    if not button then
+        return false
+    end
+    if button.IsShown then
+        return button:IsShown()
+    end
+    return button.shown == true
+end
+
+function UI.GetReportControlState()
+    return {
+        reportShown = buttonIsShown(detail.reportButton),
+        reportEnabled = detail.reportButton and detail.reportButton.enabled == true or false,
+    }
 end
 
 local function createHeader(parent)
@@ -982,7 +1076,41 @@ end
 local function createDetails(parent)
     detail.title =
         createFont(parent, "OVERLAY", "GameFontNormal", "TOPLEFT", parent, "TOPLEFT", OUTER_MARGIN, DETAIL_TITLE_TOP)
+    detail.title:SetWidth(DETAIL_TITLE_MAX_WIDTH)
+    detail.title:SetWordWrap(false)
     detail.title:SetText("Candidate Detail")
+
+    local reportButton = createButton(parent, "Report", 72, 22)
+    reportButton:SetPoint("LEFT", detail.title, "LEFT", 160 + DETAIL_TITLE_BUTTON_GAP, 0)
+    reportButton:SetScript("OnClick", function()
+        if not selectedCandidate then
+            Util.Print("Select a candidate first.")
+            return
+        end
+        if not Report or not Report.OpenBottingReport then
+            Util.Print("Report helper unavailable.")
+            return
+        end
+        if not Report.IsCriticalCandidate(selectedCandidate) then
+            Util.Print("Report assist is available for Critical candidates only.")
+            return
+        end
+
+        local opened, diagnostic = Report.OpenBottingReport(selectedCandidate)
+        if opened then
+            Util.Print("Opened Blizzard report frame. Select Cheating > Botting and review before submitting.")
+        else
+            Util.Print("Could not open botting report: " .. tostring(diagnostic and diagnostic.reason or "unknown"))
+        end
+        updateReportControls(selectedCandidate)
+    end)
+    bindTooltip(reportButton, "Report", {
+        "Opens Blizzard's in-world report flow for a Critical candidate when a reportable player location is available.",
+        "The addon does not submit the report.",
+    })
+    detail.reportButton = reportButton
+    positionReportButton()
+    updateReportControls(nil)
 
     detail.subtitle = createFont(
         parent,
@@ -1162,16 +1290,18 @@ local function createControls(parent)
     end)
     bindTooltip(purgeSelected, "Purge Selected", { "Destructive: removes evidence for the selected candidate." })
 
-    local clearSession = createButton(parent, "Clear Session", 112, 22)
-    clearSession:SetPoint("RIGHT", purgeSelected, "LEFT", -8, 0)
-    clearSession:SetScript("OnClick", function()
-        confirmPopup("BIGBOTTRACKER_CLEAR_SESSION", "Clear session-only pretracking buffers?", function()
-            Storage.ClearSessionBuffers()
-            Util.Print("Session-only scan buffers cleared.")
+    local clearBuffers = createButton(parent, "Clear Buffers", 112, 22)
+    clearBuffers:SetPoint("RIGHT", purgeSelected, "LEFT", -8, 0)
+    clearBuffers:SetScript("OnClick", function()
+        confirmPopup("BIGBOTTRACKER_CLEAR_BUFFERS", "Clear runtime scan buffers?", function()
+            Storage.ClearRuntimeBuffers()
+            Util.Print("Runtime scan buffers cleared.")
             UI.Refresh()
         end)
     end)
-    bindTooltip(clearSession, "Clear Session", { "Clears unpromoted session-only scan buffers." })
+    bindTooltip(clearBuffers, "Clear Buffers", { "Clears unpromoted runtime scan buffers." })
+
+    updateReportControls(nil)
 end
 
 function UI.Refresh()

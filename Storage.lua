@@ -9,8 +9,8 @@ local Util = BBT.Util
 local Normalizer = BBT.Normalizer
 local Scoring = BBT.Scoring
 
-local SCHEMA_VERSION = 2
-local FEATURE_VERSION = 2
+local SCHEMA_VERSION = 3
+local FEATURE_VERSION = 3
 local OBSERVATION_WINDOW_SECONDS = 1800
 
 local DEFAULT_DB = {
@@ -75,7 +75,6 @@ local DEFAULT_DB = {
         realms = {},
     },
     peers = {},
-    sessions = {},
 }
 
 local function createCandidate(identity, now, source)
@@ -93,11 +92,12 @@ local function createCandidate(identity, now, source)
         lastSeen = now,
         channels = {},
         daysSeen = {},
-        sessionsSeen = {},
         observationWindows = {},
+        lastGuid = nil,
+        lastLineID = nil,
+        lastReportObservedAt = nil,
+        lastReportDiagnostic = nil,
         totalMessages = 0,
-        sessionMessages = 0,
-        sessionId = BBT.session and BBT.session.id or nil,
         timing = {
             intervals = {},
             intervalCount = 0,
@@ -184,8 +184,10 @@ local function ensureCandidateShape(candidate)
     candidate.featureVersion = FEATURE_VERSION
     candidate.channels = candidate.channels or {}
     candidate.daysSeen = candidate.daysSeen or {}
-    candidate.sessionsSeen = candidate.sessionsSeen or {}
     candidate.observationWindows = candidate.observationWindows or {}
+    if candidate.lastReportDiagnostic ~= nil and type(candidate.lastReportDiagnostic) ~= "table" then
+        candidate.lastReportDiagnostic = nil
+    end
     candidate.timing = candidate.timing or {}
     candidate.timing.intervals = candidate.timing.intervals or {}
     candidate.timing.intervalCount = candidate.timing.intervalCount or #(candidate.timing.intervals or {})
@@ -283,33 +285,22 @@ local function mergeBaselineBins(target, source)
 end
 
 function Storage.Initialize()
-    if type(BigBotTrackerDB) ~= "table" then
-        BigBotTrackerDB = {}
-    end
-
-    Util.MergeDefaults(BigBotTrackerDB, DEFAULT_DB)
-
-    if BigBotTrackerDB.schemaVersion ~= SCHEMA_VERSION then
-        BigBotTrackerDB.schemaVersion = SCHEMA_VERSION
+    if type(BigBotTrackerDB) ~= "table" or BigBotTrackerDB.schemaVersion ~= SCHEMA_VERSION then
+        BigBotTrackerDB = Util.Clone(DEFAULT_DB)
+    else
+        Util.MergeDefaults(BigBotTrackerDB, DEFAULT_DB)
     end
 
     BBT.DB = BigBotTrackerDB
-    BBT.session = BBT.session or {}
-    BBT.session.id = tostring(Util.GetNow())
-    BBT.session.pretrack = BBT.session.pretrack or {}
-    BBT.session.recentNormalized = BBT.session.recentNormalized or {}
-    BBT.session.seenLines = BBT.session.seenLines or {}
-    BBT.session.baselineSampled = BBT.session.baselineSampled or {}
-
-    BigBotTrackerDB.sessions[BBT.session.id] = {
-        startedAt = Util.GetNow(),
-    }
+    BBT.runtime = BBT.runtime or {}
+    BBT.runtime.pretrack = BBT.runtime.pretrack or {}
+    BBT.runtime.recentNormalized = BBT.runtime.recentNormalized or {}
+    BBT.runtime.seenLines = BBT.runtime.seenLines or {}
+    BBT.runtime.baselineSampled = BBT.runtime.baselineSampled or {}
 
     for _, realmCandidates in pairs(BigBotTrackerDB.candidates) do
         for _, candidate in pairs(realmCandidates) do
             ensureCandidateShape(candidate)
-            candidate.sessionId = BBT.session.id
-            candidate.sessionMessages = 0
         end
     end
 
@@ -383,15 +374,16 @@ function Storage.RecordBaselineSample(identity, channelKey, sample, now)
     channelKey = channelKey or "unknown"
     local settings = Storage.GetSettings()
     local sampleKey = tostring(identity.fullKey or "unknown") .. ":" .. channelKey
-    BBT.session.baselineSampled = BBT.session.baselineSampled or {}
+    BBT.runtime = BBT.runtime or {}
+    BBT.runtime.baselineSampled = BBT.runtime.baselineSampled or {}
 
     if
-        BBT.session.baselineSampled[sampleKey]
-        and now - BBT.session.baselineSampled[sampleKey] < (settings.baseline.sampleCooldown or 300)
+        BBT.runtime.baselineSampled[sampleKey]
+        and now - BBT.runtime.baselineSampled[sampleKey] < (settings.baseline.sampleCooldown or 300)
     then
         return
     end
-    BBT.session.baselineSampled[sampleKey] = now
+    BBT.runtime.baselineSampled[sampleKey] = now
 
     local baseline = ensureBaseline(identity.realmKey or "unknown", channelKey)
     baseline.sampleCount = (baseline.sampleCount or 0) + 1
@@ -415,8 +407,13 @@ function Storage.RecordCandidateBaselineSample(candidate, channelKey, now)
     local timing = candidate.timing or {}
     local content = candidate.content or {}
     local behavior = candidate.behavior or {}
+    local rate = behavior.postsPerHour or 0
+    for _, summary in pairs(timing.windowSummaries or {}) do
+        rate = math.max(rate, summary.postsPerHour or 0)
+    end
+
     Storage.RecordBaselineSample(identity, channelKey or "unknown", {
-        postsPerHour = math.max(behavior.postsPerHour or 0, behavior.activeSessionPostsPerHour or 0),
+        postsPerHour = rate,
         regularity = (1 - (timing.lowestRollingEntropy or 1)) * 100,
         templateReusePercent = math.max(content.templateReusePercent or 0, content.shingleReusePercent or 0),
         burstCount = behavior.burstCount or 0,
@@ -513,7 +510,7 @@ function Storage.GetBaselineComparison(candidate)
     local timing = candidate.timing or {}
     local content = candidate.content or {}
     local behavior = candidate.behavior or {}
-    local rate = math.max(behavior.postsPerHour or 0, behavior.activeSessionPostsPerHour or 0)
+    local rate = behavior.postsPerHour or 0
     for _, summary in pairs(timing.windowSummaries or {}) do
         rate = math.max(rate, summary.postsPerHour or 0)
     end
@@ -551,15 +548,6 @@ function Storage.IsHighVolumeOutlier(identity, channelKey, count, windowSeconds)
 
     local rate = (count or 0) / ((windowSeconds or 600) / 3600)
     return percentileFromBins(baseline.postsPerHourBins, rate, baseline.sampleCount) >= 90
-end
-
-local function updateSessionCount(candidate)
-    local sessionId = BBT.session and BBT.session.id
-    if candidate.sessionId ~= sessionId then
-        candidate.sessionId = sessionId
-        candidate.sessionMessages = 0
-    end
-    candidate.sessionMessages = (candidate.sessionMessages or 0) + 1
 end
 
 local function updateTiming(candidate, now)
@@ -646,18 +634,23 @@ function Storage.RecordObservation(candidate, observation)
     local adIntent = observation.adIntent or Normalizer.DetectAdIntent(observation.text, normalized)
     local dateKey = Util.GetDateKey(now)
     local channelKey = observation.channelKey or "unknown"
-    local sessionId = BBT.session and BBT.session.id or tostring(now)
 
     candidate.firstSeen = math.min(candidate.firstSeen or now, now)
     candidate.lastSeen = math.max(candidate.lastSeen or now, now)
     candidate.networkOnly = false
     candidate.daysSeen[dateKey] = true
-    candidate.sessionsSeen[sessionId] = true
     candidate.observationWindows[tostring(observationWindow(now))] = true
     candidate.channels[channelKey] = (candidate.channels[channelKey] or 0) + 1
     candidate.totalMessages = (candidate.totalMessages or 0) + 1
+    if observation.guid and observation.guid ~= "" then
+        candidate.lastGuid = observation.guid
+        candidate.lastReportObservedAt = now
+    end
+    if observation.lineID ~= nil then
+        candidate.lastLineID = observation.lineID
+        candidate.lastReportObservedAt = now
+    end
 
-    updateSessionCount(candidate)
     updateTiming(candidate, now)
     updateBehavior(candidate, now)
     updateBurst(candidate, now)
@@ -873,11 +866,12 @@ function Storage.MergeNetworkEvidence(capsule)
     return candidate, nil
 end
 
-function Storage.ClearSessionBuffers()
-    if BBT.session then
-        BBT.session.pretrack = {}
-        BBT.session.recentNormalized = {}
-        BBT.session.seenLines = {}
+function Storage.ClearRuntimeBuffers()
+    if BBT.runtime then
+        BBT.runtime.pretrack = {}
+        BBT.runtime.recentNormalized = {}
+        BBT.runtime.seenLines = {}
+        BBT.runtime.baselineSampled = {}
     end
 end
 
@@ -898,7 +892,7 @@ function Storage.PurgeAll()
     BBT.DB.candidates = {}
     BBT.DB.templates = {}
     BBT.DB.peers = {}
-    Storage.ClearSessionBuffers()
+    Storage.ClearRuntimeBuffers()
 end
 
 function Storage.BuildDebugSummary()

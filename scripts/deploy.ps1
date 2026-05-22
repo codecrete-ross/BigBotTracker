@@ -16,6 +16,7 @@ $filesToCopy = @(
     "Storage.lua",
     "ChatScanner.lua",
     "Sync.lua",
+    "Report.lua",
     "UI.lua",
     "Core.lua",
     "logo.tga"

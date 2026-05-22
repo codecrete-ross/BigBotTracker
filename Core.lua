@@ -34,9 +34,9 @@ local function handleSlashCommand(message)
         return
     end
 
-    if message == "clear session" then
-        BBT.Storage.ClearSessionBuffers()
-        BBT.Util.Print("Session-only scan buffers cleared.")
+    if message == "clear buffers" then
+        BBT.Storage.ClearRuntimeBuffers()
+        BBT.Util.Print("Runtime scan buffers cleared.")
         return
     end
 
@@ -78,7 +78,7 @@ local function handleSlashCommand(message)
     end
 
     BBT.Util.Print(
-        "Commands: /bbt, /bbt status, /bbt sync on|off, /bbt channel NAME, /bbt monitor trade|services on|off, /bbt export, /bbt clear session, /bbt debug on|off"
+        "Commands: /bbt, /bbt status, /bbt sync on|off, /bbt channel NAME, /bbt monitor trade|services on|off, /bbt export, /bbt clear buffers, /bbt debug on|off"
     )
 end
 

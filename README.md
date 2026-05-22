@@ -4,7 +4,7 @@ Big Bot Tracker is a World of Warcraft Retail addon that helps you spot chatters
 
 It watches Trade and Services chat, looks for repeated timing and message patterns, and shows a ranked report with evidence for each suspicious character.
 
-Big Bot Tracker does **not** prove that someone is botting. It does not report players, send accusations, block chat, or post anything publicly. It gives you a clear evidence report so you can decide what to do.
+Big Bot Tracker does **not** prove that someone is botting. It does not automatically report players, send accusations, block chat, or post anything publicly. It gives you a clear evidence report so you can decide what to do.
 
 ## What It Tracks
 
@@ -41,9 +41,11 @@ The main table shows:
 
 Selecting a character shows more detail, including first seen, first suspected, active days, interval consistency, top interval buckets, robust timing variation, cadence switches, near-duplicate messages, evidence-family scores, current-channel baseline comparison, network sightings, network overlap context, and the top reasons behind the score.
 
+Critical candidates also show a report button in the detail panel. It can open Blizzard's in-world report flow when the addon has a valid reportable player location. The addon does not submit reports automatically.
+
 ## Scores And Confidence
 
-The score is a bot-likelihood signal based only on local chat behavior. Confidence is shown separately so a small amount of evidence does not look as strong as a long-running pattern.
+The score is a bot-likelihood signal based only on local chat behavior. Confidence is shown separately so a small amount of evidence does not look as strong as a long-running pattern. Reloading or relogging does not increase score, confidence, or tier.
 
 Big Bot Tracker uses transparent rules, not a black-box model. V1 scoring is grouped into capped evidence families:
 
@@ -54,6 +56,8 @@ Big Bot Tracker uses transparent rules, not a black-box model. V1 scoring is gro
 - Current-channel baseline outliers
 
 High and Critical tiers require multiple local evidence families. A single signal, such as template reuse alone or peer sightings alone, should not make someone look like a strong suspect.
+
+Confidence is based on local message volume, valid interval samples, active observation windows, distinct observed days, and evidence-family diversity. It does not use addon sessions or reload count.
 
 Examples of evidence include:
 
@@ -94,7 +98,7 @@ Network evidence is context only. It does not increase the local score or local 
 - `/bbt monitor trade on|off` toggles Trade monitoring
 - `/bbt monitor services on|off` toggles Services monitoring
 - `/bbt export` writes a compact debug summary to `BigBotTrackerDB.settings.lastDebugSummary`
-- `/bbt clear session` clears temporary scan buffers
+- `/bbt clear buffers` clears temporary runtime scan buffers
 - `/bbt debug on`
 - `/bbt debug off`
 

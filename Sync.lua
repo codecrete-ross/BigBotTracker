@@ -11,7 +11,7 @@ local Normalizer = BBT.Normalizer
 
 local PREFIX = "BigBotTrack"
 local PROTOCOL_VERSION = 2
-local FEATURE_VERSION = 2
+local FEATURE_VERSION = 3
 local MAX_PAYLOAD_BYTES = 240
 local OBSERVATION_WINDOW_SECONDS = 1800
 
