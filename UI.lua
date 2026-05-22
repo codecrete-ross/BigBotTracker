@@ -24,14 +24,15 @@ local HEADER_ICON_GAP = 24
 local HEADER_CONTENT_WIDTH = TABLE_VIEW_WIDTH - WINDOW_ICON_SIZE - HEADER_ICON_GAP
 local HEADER_ICON_RIGHT = OUTER_MARGIN + TABLE_VIEW_WIDTH - FRAME_WIDTH
 local HEADER_ICON_TOP = -40
-local TABLE_HEIGHT = 270
+local TABLE_HEIGHT = 244
 local ROW_HEIGHT = 22
 local HEADER_HEIGHT = 24
 local TITLE_TOP = -36
 local SUBTITLE_TOP = -64
 local STATUS_TOP = -98
-local HEADER_TOP = -134
-local TABLE_TOP = -160
+local FILTER_TOP = -128
+local HEADER_TOP = -158
+local TABLE_TOP = -184
 local DETAIL_TITLE_TOP = -440
 local DETAIL_TOP = -476
 local REASONS_TOP = DETAIL_TOP - 250
@@ -43,6 +44,7 @@ local tableScroll
 local tableContent
 local emptyState
 local headerButtons = {}
+local filterButtons = {}
 local rows = {}
 local detail = {}
 local reportAssistFrame
@@ -74,11 +76,27 @@ local sourceRank = {
     ["L+N"] = 3,
 }
 
+local filters = {
+    { key = "all", label = "All", tooltip = "Show every stored candidate." },
+    { key = "active", label = "Active", tooltip = "Show unhandled candidates and watched candidates." },
+    { key = "watched", label = "Watched", tooltip = "Show watched candidates only." },
+    { key = "reported", label = "Reported", tooltip = "Show candidates marked reported." },
+    { key = "ignored", label = "Ignored", tooltip = "Show ignored candidates." },
+}
+
 local columns = {
+    {
+        key = "watch",
+        label = "",
+        width = 36,
+        align = "CENTER",
+        sortable = false,
+        tooltip = "Eye button for keeping a candidate visible in the clean Active view.",
+    },
     {
         key = "character",
         label = "Character-Realm",
-        width = 198,
+        width = 158,
         align = "LEFT",
         defaultDescending = false,
         tooltip = "Tracked character and realm. Same names on different realms are kept separate.",
@@ -173,6 +191,11 @@ local columns = {
     },
 }
 
+local columnIndexByKey = {}
+for index, column in ipairs(columns) do
+    columnIndexByKey[column.key] = index
+end
+
 local tierColors = {
     Critical = { 1.00, 0.22, 0.16 },
     High = { 1.00, 0.52, 0.12 },
@@ -209,7 +232,9 @@ end
 
 local function createButton(parent, text, width, height)
     local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    button:SetSize(width or 96, height or 22)
+    button.width = width or 96
+    button.height = height or 22
+    button:SetSize(button.width, button.height)
     button:SetText(text)
     return button
 end
@@ -292,14 +317,85 @@ local function bindTooltip(owner, title, lines)
     end)
 end
 
+local isSortableColumnKey
+
 local function getSettingsUi()
     local settings = Storage.GetSettings()
     settings.ui = settings.ui or {}
     settings.ui.sortKey = settings.ui.sortKey or "score"
+    if not isSortableColumnKey(settings.ui.sortKey) then
+        settings.ui.sortKey = "score"
+    end
     if settings.ui.sortDescending == nil then
         settings.ui.sortDescending = true
     end
+    settings.ui.filterKey = settings.ui.filterKey or "active"
     return settings.ui
+end
+
+local function isValidFilterKey(key)
+    for _, filter in ipairs(filters) do
+        if filter.key == key then
+            return true
+        end
+    end
+    return false
+end
+
+isSortableColumnKey = function(key)
+    for _, column in ipairs(columns) do
+        if column.key == key then
+            return column.sortable ~= false
+        end
+    end
+    return false
+end
+
+local function isCandidateWatched(candidate)
+    return Storage.IsCandidateWatched and Storage.IsCandidateWatched(candidate) or false
+end
+
+local function isCandidateReported(candidate)
+    return Storage.IsCandidateReported and Storage.IsCandidateReported(candidate) or false
+end
+
+local function isCandidateIgnored(candidate)
+    return Storage.IsCandidateIgnored and Storage.IsCandidateIgnored(candidate) or false
+end
+
+local function isCandidateHandled(candidate)
+    return Storage.IsCandidateHandled and Storage.IsCandidateHandled(candidate) or false
+end
+
+local function getTriageSummary(candidate)
+    local parts = {}
+    if isCandidateWatched(candidate) then
+        parts[#parts + 1] = "Watched"
+    end
+    if isCandidateReported(candidate) then
+        parts[#parts + 1] = "Reported"
+    end
+    if isCandidateIgnored(candidate) then
+        parts[#parts + 1] = "Ignored"
+    end
+    return #parts > 0 and table.concat(parts, ", ") or "Active"
+end
+
+local function candidateMatchesFilter(candidate, filterKey)
+    filterKey = isValidFilterKey(filterKey) and filterKey or "active"
+    if filterKey == "all" then
+        return true
+    end
+    if filterKey == "watched" then
+        return isCandidateWatched(candidate)
+    end
+    if filterKey == "reported" then
+        return isCandidateReported(candidate)
+    end
+    if filterKey == "ignored" then
+        return isCandidateIgnored(candidate)
+    end
+    return isCandidateWatched(candidate) or not isCandidateHandled(candidate)
 end
 
 local function getSourceMarker(candidate)
@@ -438,7 +534,9 @@ local function getSortValue(candidate, key)
     local content = candidate.content or {}
     local behavior = candidate.behavior or {}
 
-    if key == "character" then
+    if key == "watch" then
+        return isCandidateWatched(candidate) and 1 or 0
+    elseif key == "character" then
         return string.lower(candidate.displayName or "")
     elseif key == "tier" then
         return tierRank[score.tier or "Insufficient Data"] or 0
@@ -531,7 +629,35 @@ function UI.SortCandidates(candidates)
     return sorted
 end
 
+function UI.FilterCandidates(candidates)
+    local uiSettings = getSettingsUi()
+    local filterKey = uiSettings.filterKey or "active"
+    local filtered = {}
+
+    for _, candidate in ipairs(candidates or {}) do
+        if candidateMatchesFilter(candidate, filterKey) then
+            filtered[#filtered + 1] = candidate
+        end
+    end
+
+    return filtered
+end
+
+function UI.SetFilter(key)
+    local uiSettings = getSettingsUi()
+    uiSettings.filterKey = isValidFilterKey(key) and key or "active"
+end
+
+function UI.GetFilterState()
+    local uiSettings = getSettingsUi()
+    return isValidFilterKey(uiSettings.filterKey) and uiSettings.filterKey or "active"
+end
+
 function UI.SetSort(key, descending)
+    if not isSortableColumnKey(key) then
+        key = "score"
+        descending = true
+    end
     local uiSettings = getSettingsUi()
     uiSettings.sortKey = key or "score"
     uiSettings.sortDescending = descending ~= false
@@ -584,6 +710,22 @@ local function updateHeaderLabels()
     end
 end
 
+local function updateFilterButtons()
+    local filterKey = UI.GetFilterState()
+    for _, filter in ipairs(filters) do
+        local button = filterButtons[filter.key]
+        if button then
+            local active = filter.key == filterKey
+            if button.SetAlpha then
+                button:SetAlpha(active and 1 or 0.68)
+            end
+            if button.SetText then
+                button:SetText(active and ("[" .. filter.label .. "]") or filter.label)
+            end
+        end
+    end
+end
+
 local function setRowVisual(row)
     if not row or not row.bg then
         return
@@ -628,6 +770,7 @@ local function showCandidateTooltip(owner)
     end
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("Source: " .. getSourceMarker(candidate), 0.85, 0.85, 0.85, true)
+    GameTooltip:AddLine("Review: " .. getTriageSummary(candidate), 0.85, 0.85, 0.85, true)
     GameTooltip:Show()
 end
 
@@ -649,13 +792,37 @@ local function setButtonEnabled(button, enabled)
     end
 end
 
+local positionReportButton
+
 local function updateReportControls(candidate)
     local isCritical = Report and Report.IsCriticalCandidate and Report.IsCriticalCandidate(candidate)
+    local hasCandidate = candidate ~= nil
+    local reported = isCandidateReported(candidate)
+    local ignored = isCandidateIgnored(candidate)
+    local watched = isCandidateWatched(candidate)
 
     if detail.reportButton then
         setShown(detail.reportButton, isCritical)
         setButtonEnabled(detail.reportButton, isCritical)
     end
+    if detail.watchButton then
+        setShown(detail.watchButton, hasCandidate)
+        setButtonEnabled(detail.watchButton, hasCandidate)
+        detail.watchButton:SetText(watched and "Unwatch" or "Watch")
+    end
+    if detail.ignoreButton then
+        setShown(detail.ignoreButton, hasCandidate)
+        setButtonEnabled(detail.ignoreButton, hasCandidate)
+        detail.ignoreButton:SetText(ignored and "Unignore" or "Ignore")
+    end
+    if detail.reportedButton then
+        setShown(detail.reportedButton, hasCandidate)
+        setButtonEnabled(detail.reportedButton, hasCandidate)
+        detail.reportedButton:SetText(reported and "Clear Reported" or "Mark Reported")
+        detail.reportedButton.width = reported and 122 or 112
+        detail.reportedButton:SetSize(detail.reportedButton.width, 22)
+    end
+    positionReportButton()
 end
 
 local function getTitleTextWidth()
@@ -676,17 +843,30 @@ local function getTitleTextWidth()
     return 160
 end
 
-local function positionReportButton()
-    if not detail.title or not detail.reportButton then
+positionReportButton = function()
+    if not detail.title then
         return
     end
 
     local titleWidth = getTitleTextWidth()
     detail.title:SetWidth(titleWidth)
-    if detail.reportButton.ClearAllPoints then
-        detail.reportButton:ClearAllPoints()
+
+    local x = titleWidth + DETAIL_TITLE_BUTTON_GAP
+    local buttons = {
+        detail.reportButton,
+        detail.watchButton,
+        detail.ignoreButton,
+        detail.reportedButton,
+    }
+    for _, button in ipairs(buttons) do
+        if button then
+            if button.ClearAllPoints then
+                button:ClearAllPoints()
+            end
+            button:SetPoint("LEFT", detail.title, "LEFT", x, 0)
+            x = x + (button.width or 96) + 8
+        end
     end
-    detail.reportButton:SetPoint("LEFT", detail.title, "LEFT", titleWidth + DETAIL_TITLE_BUTTON_GAP, 0)
 end
 
 local openReportAssistForCandidate
@@ -714,7 +894,7 @@ local function setReportAssistStatus(opened, diagnostic)
 
     if opened then
         reportAssistFrame.statusText:SetText(
-            "Blizzard report opened. Paste the selected comment, then submit manually."
+            "Blizzard report opened and this candidate was marked reported. Clear it here if needed."
         )
         setTextColor(reportAssistFrame.statusText, { 0.66, 1.00, 0.66 })
     else
@@ -969,8 +1149,20 @@ local function createReportAssistFrame()
     end)
     reportAssistFrame.openButton = openButton
 
+    local clearReportedButton = createButton(reportAssistFrame, "Clear Reported", 112, 22)
+    clearReportedButton:SetPoint("RIGHT", openButton, "LEFT", -8, 0)
+    clearReportedButton:SetScript("OnClick", function()
+        if reportAssistFrame and reportAssistFrame.candidate and Storage.ClearReported then
+            Storage.ClearReported(reportAssistFrame.candidate)
+            Util.Print("Cleared reported status for " .. tostring(reportAssistFrame.candidate.displayName) .. ".")
+            UI.Refresh()
+            setButtonEnabled(clearReportedButton, false)
+        end
+    end)
+    reportAssistFrame.clearReportedButton = clearReportedButton
+
     local selectButton = createButton(reportAssistFrame, "Select Text", 92, 22)
-    selectButton:SetPoint("RIGHT", openButton, "LEFT", -8, 0)
+    selectButton:SetPoint("RIGHT", clearReportedButton, "LEFT", -8, 0)
     selectButton:SetScript("OnClick", selectReportAssistText)
     reportAssistFrame.selectButton = selectButton
 
@@ -991,6 +1183,7 @@ local function showReportAssist(candidate, opened, diagnostic)
     assistFrame.instruction:SetText(assist.instruction or "In Blizzard's report window, select Cheating > Botting.")
     setReportAssistComment(assist.comment)
     assistFrame.commentCount:SetText(string.format("%d / %d", #(assist.comment or ""), assist.commentLimit or 127))
+    setButtonEnabled(assistFrame.clearReportedButton, isCandidateReported(candidate))
 
     for index, line in ipairs(assistFrame.bulletLines or {}) do
         local bullet = assist.bullets and assist.bullets[index]
@@ -1109,7 +1302,8 @@ local function refreshDetails(candidate)
     setGroupLine("summary", 1, "Tier", score.tier or "Insufficient Data")
     setGroupLine("summary", 2, "Score", tostring(scoreValue(candidate)))
     setGroupLine("summary", 3, "Confidence", Util.FormatPercent(score.confidence or 0))
-    setGroupLine("summary", 4, "Source", getSourceMarker(candidate))
+    setGroupLine("summary", 4, "Review", getTriageSummary(candidate))
+    setGroupLine("summary", 5, "Source", getSourceMarker(candidate))
 
     setGroupLine("activity", 1, "First Seen", Util.FormatTimestamp(candidate.firstSeen))
     setGroupLine("activity", 2, "First Suspected", Util.FormatTimestamp(candidate.firstPromoted))
@@ -1225,7 +1419,44 @@ function UI.GetReportAssistState()
         comment = comment,
         status = reportAssistFrame and reportAssistFrame.statusText and reportAssistFrame.statusText.text or "",
         bullets = bullets,
+        clearReportedEnabled = reportAssistFrame
+            and reportAssistFrame.clearReportedButton
+            and reportAssistFrame.clearReportedButton.enabled == true
+            or false,
     }
+end
+
+function UI.GetTriageControlState()
+    return {
+        watchShown = buttonIsShown(detail.watchButton),
+        watchText = detail.watchButton and detail.watchButton.text or "",
+        ignoreShown = buttonIsShown(detail.ignoreButton),
+        ignoreText = detail.ignoreButton and detail.ignoreButton.text or "",
+        reportedShown = buttonIsShown(detail.reportedButton),
+        reportedText = detail.reportedButton and detail.reportedButton.text or "",
+    }
+end
+
+function UI.GetRowState(index)
+    local row = rows[index]
+    if not row then
+        return nil
+    end
+    return {
+        shown = row:IsShown(),
+        candidate = row.candidate,
+        watchText = row.watchButton and row.watchButton.text and row.watchButton.text.text or "",
+        watched = row.candidate and isCandidateWatched(row.candidate) or false,
+    }
+end
+
+function UI.ClickRowWatch(index)
+    local row = rows[index]
+    if row and row.watchButton and row.watchButton.scripts and row.watchButton.scripts.OnClick then
+        row.watchButton.scripts.OnClick(row.watchButton)
+        return true
+    end
+    return false
 end
 
 local function createHeader(parent)
@@ -1289,25 +1520,29 @@ local function createHeader(parent)
             separator:SetColorTexture(1, 1, 1, 0.08)
         end
 
-        button:SetScript("OnClick", function(self)
-            local uiSettings = getSettingsUi()
-            if uiSettings.sortKey == self.column.key then
-                uiSettings.sortDescending = not uiSettings.sortDescending
-            else
-                uiSettings.sortKey = self.column.key
-                uiSettings.sortDescending = self.column.defaultDescending ~= false
-            end
-            updateHeaderLabels()
-            UI.Refresh()
-        end)
+        if column.sortable ~= false then
+            button:SetScript("OnClick", function(self)
+                local uiSettings = getSettingsUi()
+                if uiSettings.sortKey == self.column.key then
+                    uiSettings.sortDescending = not uiSettings.sortDescending
+                else
+                    uiSettings.sortKey = self.column.key
+                    uiSettings.sortDescending = self.column.defaultDescending ~= false
+                end
+                updateHeaderLabels()
+                UI.Refresh()
+            end)
+        end
         button:SetScript("OnEnter", function(self)
             if not GameTooltip then
                 return
             end
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:AddLine(self.column.label, 1, 1, 1)
+            GameTooltip:AddLine(self.column.label ~= "" and self.column.label or "Watch", 1, 1, 1)
             GameTooltip:AddLine(self.column.tooltip, 0.85, 0.85, 0.85, true)
-            GameTooltip:AddLine("Click to sort. Click again to reverse direction.", 0.85, 0.85, 0.85, true)
+            if self.column.sortable ~= false then
+                GameTooltip:AddLine("Click to sort. Click again to reverse direction.", 0.85, 0.85, 0.85, true)
+            end
             GameTooltip:Show()
         end)
         button:SetScript("OnLeave", function()
@@ -1324,6 +1559,44 @@ local function createHeader(parent)
     updateHeaderLabels()
 end
 
+local function setWatchButtonVisual(button, candidate)
+    if not button then
+        return
+    end
+
+    local watched = isCandidateWatched(candidate)
+    button.candidate = candidate
+    if button.text then
+        button.text:SetText(watched and "*" or "o")
+        setTextColor(button.text, watched and { 1.00, 0.82, 0.20 } or { 0.70, 0.70, 0.70 })
+    end
+    if button.icon then
+        local atlasSet = false
+        if button.icon.SetAtlas then
+            atlasSet = pcall(button.icon.SetAtlas, button.icon, "common-icon-eye", true)
+        end
+        if not atlasSet and button.icon.SetTexture then
+            button.icon:SetTexture(watched and "Interface\\Buttons\\UI-CheckBox-Check" or "Interface\\Buttons\\UI-CheckBox-Up")
+        end
+    end
+    if button.SetAlpha then
+        button:SetAlpha(watched and 1 or 0.72)
+    end
+end
+
+local function showWatchTooltip(owner)
+    if not owner or not GameTooltip then
+        return
+    end
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip:AddLine(isCandidateWatched(owner.candidate) and "Unwatch" or "Watch", 1, 1, 1)
+    GameTooltip:AddLine("Keeps this candidate visible in the clean Active view.", 0.85, 0.85, 0.85, true)
+    if owner.candidate then
+        GameTooltip:AddLine("Review: " .. getTriageSummary(owner.candidate), 0.85, 0.85, 0.85, true)
+    end
+    GameTooltip:Show()
+end
+
 local function createRow(index)
     local row = CreateFrame("Button", nil, tableContent)
     row:SetPoint("TOPLEFT", tableContent, "TOPLEFT", 0, -((index - 1) * ROW_HEIGHT))
@@ -1336,11 +1609,48 @@ local function createRow(index)
 
     local x = 0
     for columnIndex, column in ipairs(columns) do
-        local field = createFont(row, "OVERLAY", "GameFontHighlightSmall", "LEFT", row, "LEFT", x + 4, 0)
-        field:SetWidth(column.width - 8)
-        field:SetJustifyH(column.align or "LEFT")
-        field:SetText("")
-        row.fields[columnIndex] = field
+        if column.key == "watch" then
+            local button = CreateFrame("Button", nil, row)
+            button:SetPoint("LEFT", row, "LEFT", x + 5, 0)
+            button:SetSize(column.width - 10, ROW_HEIGHT - 4)
+            button:SetScript("OnClick", function(self)
+                if not self.candidate then
+                    return
+                end
+                local watched = Storage.ToggleWatched(self.candidate)
+                Util.Print(
+                    string.format(
+                        "%s %s.",
+                        watched and "Watching" or "Stopped watching",
+                        tostring(self.candidate.displayName)
+                    )
+                )
+                UI.Refresh()
+            end)
+            button:SetScript("OnEnter", showWatchTooltip)
+            button:SetScript("OnLeave", function()
+                if GameTooltip then
+                    GameTooltip:Hide()
+                end
+            end)
+
+            local icon = button:CreateTexture(nil, "ARTWORK")
+            icon:SetPoint("CENTER", button, "CENTER", 0, 0)
+            icon:SetSize(16, 16)
+            button.icon = icon
+
+            local text = createFont(button, "OVERLAY", "GameFontHighlightSmall", "CENTER", button, "CENTER", 0, 0)
+            text:SetJustifyH("CENTER")
+            text:SetWidth(column.width - 10)
+            button.text = text
+            row.watchButton = button
+        else
+            local field = createFont(row, "OVERLAY", "GameFontHighlightSmall", "LEFT", row, "LEFT", x + 4, 0)
+            field:SetWidth(column.width - 8)
+            field:SetJustifyH(column.align or "LEFT")
+            field:SetText("")
+            row.fields[columnIndex] = field
+        end
         x = x + column.width + 4
     end
 
@@ -1378,6 +1688,10 @@ local function setRowField(row, index, text, color)
     setTextColor(field, color or { 1, 1, 1 })
 end
 
+local function setRowFieldByKey(row, key, text, color)
+    setRowField(row, columnIndexByKey[key], text, color)
+end
+
 local function populateRow(row, candidate)
     local score = candidate.score or {}
     local timing = candidate.timing or {}
@@ -1390,18 +1704,19 @@ local function populateRow(row, candidate)
     row.selected = candidate.fullKey == selectedKey
     row:Show()
 
-    setRowField(row, 1, candidate.displayName or "-", { 1, 1, 1 })
-    setRowField(row, 2, tier, tierColors[tier])
-    setRowField(row, 3, tostring(scoreValue(candidate)), { 1, 1, 1 })
-    setRowField(row, 4, Util.FormatPercent(confidenceValue(candidate)), { 0.88, 0.88, 0.88 })
-    setRowField(row, 5, formatFirstSeen(candidate), { 0.82, 0.82, 0.82 })
-    setRowField(row, 6, formatLastSeen(candidate), { 0.82, 0.82, 0.82 })
-    setRowField(row, 7, tostring(candidate.totalMessages or 0), { 1, 1, 1 })
-    setRowField(row, 8, Util.FormatNumber(behavior.postsPerHour or 0, 1), { 1, 1, 1 })
-    setRowField(row, 9, Util.FormatDuration(timing.averageInterval or 0), { 0.92, 0.92, 0.92 })
-    setRowField(row, 10, cadence.label, cadence.color)
-    setRowField(row, 11, Util.FormatPercent(content.templateReusePercent or 0), { 1, 1, 1 })
-    setRowField(row, 12, getSourceMarker(candidate), { 0.82, 0.92, 1.00 })
+    setWatchButtonVisual(row.watchButton, candidate)
+    setRowFieldByKey(row, "character", candidate.displayName or "-", isCandidateIgnored(candidate) and { 0.62, 0.62, 0.62 } or { 1, 1, 1 })
+    setRowFieldByKey(row, "tier", tier, tierColors[tier])
+    setRowFieldByKey(row, "score", tostring(scoreValue(candidate)), { 1, 1, 1 })
+    setRowFieldByKey(row, "confidence", Util.FormatPercent(confidenceValue(candidate)), { 0.88, 0.88, 0.88 })
+    setRowFieldByKey(row, "firstSeen", formatFirstSeen(candidate), { 0.82, 0.82, 0.82 })
+    setRowFieldByKey(row, "lastSeen", formatLastSeen(candidate), { 0.82, 0.82, 0.82 })
+    setRowFieldByKey(row, "messages", tostring(candidate.totalMessages or 0), { 1, 1, 1 })
+    setRowFieldByKey(row, "rate", Util.FormatNumber(behavior.postsPerHour or 0, 1), { 1, 1, 1 })
+    setRowFieldByKey(row, "averageInterval", Util.FormatDuration(timing.averageInterval or 0), { 0.92, 0.92, 0.92 })
+    setRowFieldByKey(row, "cadence", cadence.label, cadence.color)
+    setRowFieldByKey(row, "reuse", Util.FormatPercent(content.templateReusePercent or 0), { 1, 1, 1 })
+    setRowFieldByKey(row, "source", getSourceMarker(candidate), { 0.82, 0.92, 1.00 })
 
     setRowVisual(row)
 end
@@ -1483,6 +1798,75 @@ local function createDetails(parent)
     })
     detail.reportButton = reportButton
     parent.reportButton = reportButton
+
+    local watchButton = createButton(parent, "Watch", 72, 22)
+    watchButton:SetScript("OnClick", function()
+        if not selectedCandidate then
+            Util.Print("Select a candidate first.")
+            return
+        end
+        local watched = Storage.ToggleWatched(selectedCandidate)
+        Util.Print(
+            string.format(
+                "%s %s.",
+                watched and "Watching" or "Stopped watching",
+                tostring(selectedCandidate.displayName)
+            )
+        )
+        UI.Refresh()
+    end)
+    bindTooltip(watchButton, "Watch", {
+        "Keeps the selected candidate visible in the clean Active view.",
+        "This is local display state and does not change score.",
+    })
+    detail.watchButton = watchButton
+    parent.watchButton = watchButton
+
+    local ignoreButton = createButton(parent, "Ignore", 84, 22)
+    ignoreButton:SetScript("OnClick", function()
+        if not selectedCandidate then
+            Util.Print("Select a candidate first.")
+            return
+        end
+        local ignored = Storage.SetIgnored(selectedCandidate, not isCandidateIgnored(selectedCandidate))
+        Util.Print(
+            string.format(
+                "%s %s.",
+                ignored and "Ignored" or "Unignored",
+                tostring(selectedCandidate.displayName)
+            )
+        )
+        UI.Refresh()
+    end)
+    bindTooltip(ignoreButton, "Ignore", {
+        "Hides the selected candidate from the clean Active view without deleting evidence.",
+        "Watched candidates remain visible even when ignored.",
+    })
+    detail.ignoreButton = ignoreButton
+    parent.ignoreButton = ignoreButton
+
+    local reportedButton = createButton(parent, "Mark Reported", 112, 22)
+    reportedButton:SetScript("OnClick", function()
+        if not selectedCandidate then
+            Util.Print("Select a candidate first.")
+            return
+        end
+        if isCandidateReported(selectedCandidate) then
+            Storage.ClearReported(selectedCandidate)
+            Util.Print("Cleared reported status for " .. tostring(selectedCandidate.displayName) .. ".")
+        else
+            Storage.MarkReported(selectedCandidate)
+            Util.Print("Marked " .. tostring(selectedCandidate.displayName) .. " as reported.")
+        end
+        UI.Refresh()
+    end)
+    bindTooltip(reportedButton, "Reported", {
+        "Tracks that this player has been handled by your local report workflow.",
+        "You can clear this if the report flow was opened by mistake or not completed.",
+    })
+    detail.reportedButton = reportedButton
+    parent.reportedButton = reportedButton
+
     positionReportButton()
     updateReportControls(nil)
 
@@ -1500,7 +1884,7 @@ local function createDetails(parent)
     detail.subtitle:SetText("Select a row to view structured local and network evidence.")
 
     detail.groups = {
-        summary = createSection(parent, "Summary", OUTER_MARGIN, DETAIL_TOP, 250, 4),
+        summary = createSection(parent, "Summary", OUTER_MARGIN, DETAIL_TOP, 250, 5),
         activity = createSection(parent, "Activity", OUTER_MARGIN, DETAIL_TOP - 102, 340, 5),
         network = createSection(parent, "Network Context", OUTER_MARGIN, DETAIL_TOP - 220, 340, 4),
         timing = createSection(parent, "Timing", 380, DETAIL_TOP, 350, 9),
@@ -1556,12 +1940,12 @@ local function createStatusStrip(parent)
     parent.scanStatusText = scan
 
     local tracked = createFont(statusFrame, "OVERLAY", "GameFontHighlightSmall", "LEFT", statusFrame, "LEFT", 160, 0)
-    tracked:SetWidth(130)
+    tracked:SetWidth(190)
     tracked:SetText("Tracked: 0")
     parent.trackedStatusText = tracked
 
-    local sync = createFont(statusFrame, "OVERLAY", "GameFontHighlightSmall", "LEFT", statusFrame, "LEFT", 308, 0)
-    sync:SetWidth(330)
+    local sync = createFont(statusFrame, "OVERLAY", "GameFontHighlightSmall", "LEFT", statusFrame, "LEFT", 370, 0)
+    sync:SetWidth(250)
     sync:SetText("Sync: Off")
     parent.syncStatusText = sync
 
@@ -1579,6 +1963,30 @@ local function createStatusStrip(parent)
             "Current sync state: " .. tostring(BBT.Sync and BBT.Sync.status or "Off"),
         }
     end)
+end
+
+local function createFilterBar(parent)
+    local filterFrame = CreateFrame("Frame", nil, parent)
+    filterFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", OUTER_MARGIN, FILTER_TOP)
+    filterFrame:SetSize(TABLE_VIEW_WIDTH, 22)
+    parent.filterFrame = filterFrame
+
+    local x = 0
+    for _, filter in ipairs(filters) do
+        local width = filter.key == "all" and 52 or filter.key == "reported" and 86 or 78
+        local button = createButton(filterFrame, filter.label, width, 22)
+        button:SetPoint("LEFT", filterFrame, "LEFT", x, 0)
+        button.filterKey = filter.key
+        button:SetScript("OnClick", function(self)
+            UI.SetFilter(self.filterKey)
+            updateFilterButtons()
+            UI.Refresh()
+        end)
+        bindTooltip(button, filter.label .. " Filter", { filter.tooltip })
+        filterButtons[filter.key] = button
+        x = x + width + 6
+    end
+    updateFilterButtons()
 end
 
 local function confirmPopup(name, text, onAccept)
@@ -1682,8 +2090,15 @@ function UI.Refresh()
 
     refreshCount = refreshCount + 1
     updateHeaderLabels()
+    updateFilterButtons()
 
-    local candidates = UI.SortCandidates(Storage.GetAllCandidates())
+    local allCandidates = Storage.GetAllCandidates()
+    local candidates = UI.SortCandidates(UI.FilterCandidates(allCandidates))
+    if #allCandidates == 0 then
+        emptyState:SetText("No tracked candidates yet. Monitoring Trade and Services.")
+    else
+        emptyState:SetText("No candidates match the current filter.")
+    end
     emptyState:SetShown(#candidates == 0)
 
     local contentHeight = math.max(TABLE_HEIGHT, #candidates * ROW_HEIGHT)
@@ -1709,6 +2124,9 @@ function UI.Refresh()
 
     for index = #candidates + 1, #rows do
         rows[index].candidate = nil
+        if rows[index].watchButton then
+            rows[index].watchButton.candidate = nil
+        end
         rows[index]:Hide()
     end
 
@@ -1765,7 +2183,6 @@ function UI.Create()
     frame.subtitle:SetWidth(HEADER_CONTENT_WIDTH)
     frame.subtitle:SetText("Chat-based suspicion report for Trade and Services.")
 
-
     frame.iconArea = CreateFrame("Frame", nil, frame)
     frame.iconArea:SetSize(WINDOW_ICON_SIZE, WINDOW_ICON_SIZE)
     frame.iconArea:SetPoint("TOPRIGHT", frame, "TOPRIGHT", HEADER_ICON_RIGHT, HEADER_ICON_TOP)
@@ -1773,7 +2190,9 @@ function UI.Create()
     frame.icon = frame.iconArea:CreateTexture(nil, "OVERLAY")
     frame.icon:SetAllPoints(frame.iconArea)
     frame.icon:SetTexture(ADDON_ICON_TEXTURE)
+
     createStatusStrip(frame)
+    createFilterBar(frame)
     createTable(frame)
     createDetails(frame)
     createControls(frame)
@@ -1808,11 +2227,12 @@ function UI.UpdateStatus()
     end
 
     local tracked = Storage.GetAllCandidates()
+    local visible = UI.FilterCandidates(tracked)
     if frame.scanStatusText then
         frame.scanStatusText:SetText("Live: scanning")
     end
     if frame.trackedStatusText then
-        frame.trackedStatusText:SetText("Tracked: " .. tostring(#tracked))
+        frame.trackedStatusText:SetText(string.format("Tracked: %d (%d visible)", #tracked, #visible))
     end
     if frame.syncStatusText then
         frame.syncStatusText:SetText("Sync: " .. tostring(BBT.Sync and BBT.Sync.status or "Off"))

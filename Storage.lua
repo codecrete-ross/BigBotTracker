@@ -64,6 +64,7 @@ local DEFAULT_DB = {
         ui = {
             sortKey = "score",
             sortDescending = true,
+            filterKey = "active",
         },
         monitor = {
             trade = true,
@@ -98,6 +99,8 @@ local function createCandidate(identity, now, source)
         lastLineID = nil,
         lastReportObservedAt = nil,
         lastReportDiagnostic = nil,
+        triage = {
+        },
         totalMessages = 0,
         timing = {
             intervals = {},
@@ -181,6 +184,16 @@ local function observationWindow(timestamp)
     return math.floor(timestamp / OBSERVATION_WINDOW_SECONDS)
 end
 
+local function ensureTriage(candidate)
+    candidate.triage = candidate.triage or {}
+    candidate.triage.watched = candidate.triage.watched == true and true or nil
+    candidate.triage.reported = candidate.triage.reported == true and true or nil
+    candidate.triage.ignored = candidate.triage.ignored == true and true or nil
+    local reportOpenCount = tonumber(candidate.triage.reportOpenCount) or 0
+    candidate.triage.reportOpenCount = reportOpenCount > 0 and reportOpenCount or nil
+    return candidate.triage
+end
+
 local function ensureCandidateShape(candidate)
     candidate.featureVersion = FEATURE_VERSION
     candidate.channels = candidate.channels or {}
@@ -214,6 +227,13 @@ local function ensureCandidateShape(candidate)
     candidate.score = candidate.score or {}
     candidate.score.familyScores = candidate.score.familyScores or {}
     candidate.score.reasons = candidate.score.reasons or {}
+    ensureTriage(candidate)
+end
+
+local function markTriageChanged(reason)
+    if BBT.UI and BBT.UI.MarkDirty then
+        BBT.UI.MarkDirty(reason or "triage")
+    end
 end
 
 local function refreshExistingCandidates()
@@ -367,6 +387,124 @@ function Storage.GetAllCandidates()
     end)
 
     return candidates
+end
+
+function Storage.GetCandidateTriage(candidate)
+    if not candidate then
+        return {
+            watched = false,
+            reported = false,
+            ignored = false,
+            reportOpenCount = 0,
+        }
+    end
+    return ensureTriage(candidate)
+end
+
+function Storage.IsCandidateWatched(candidate)
+    return candidate and ensureTriage(candidate).watched == true or false
+end
+
+function Storage.IsCandidateReported(candidate)
+    return candidate and ensureTriage(candidate).reported == true or false
+end
+
+function Storage.IsCandidateIgnored(candidate)
+    return candidate and ensureTriage(candidate).ignored == true or false
+end
+
+function Storage.IsCandidateHandled(candidate)
+    if not candidate then
+        return false
+    end
+    local triage = ensureTriage(candidate)
+    return triage.reported == true or triage.ignored == true
+end
+
+function Storage.SetWatched(candidate, watched, now)
+    if not candidate then
+        return false
+    end
+
+    now = now or Util.GetNow()
+    local triage = ensureTriage(candidate)
+    local desired = watched == true
+    if (triage.watched == true) == desired then
+        return desired
+    end
+
+    triage.watched = desired and true or nil
+    if desired then
+        triage.watchedAt = now
+        triage.watchedClearedAt = nil
+    else
+        triage.watchedClearedAt = now
+    end
+    markTriageChanged("watch")
+    return desired
+end
+
+function Storage.ToggleWatched(candidate, now)
+    return Storage.SetWatched(candidate, not Storage.IsCandidateWatched(candidate), now)
+end
+
+function Storage.MarkReported(candidate, now, fromReportOpen)
+    if not candidate then
+        return false
+    end
+
+    now = now or Util.GetNow()
+    local triage = ensureTriage(candidate)
+    if fromReportOpen then
+        triage.reportOpenCount = (tonumber(triage.reportOpenCount) or 0) + 1
+        triage.reportOpenedAt = now
+    end
+    triage.reported = true
+    triage.reportedAt = now
+    triage.reportedClearedAt = nil
+    triage.ignored = nil
+    markTriageChanged("reported")
+    return true
+end
+
+function Storage.ClearReported(candidate, now)
+    if not candidate then
+        return false
+    end
+
+    now = now or Util.GetNow()
+    local triage = ensureTriage(candidate)
+    if triage.reported ~= true then
+        return false
+    end
+
+    triage.reported = nil
+    triage.reportedClearedAt = now
+    markTriageChanged("reported-cleared")
+    return true
+end
+
+function Storage.SetIgnored(candidate, ignored, now)
+    if not candidate then
+        return false
+    end
+
+    now = now or Util.GetNow()
+    local triage = ensureTriage(candidate)
+    local desired = ignored == true
+    if (triage.ignored == true) == desired then
+        return desired
+    end
+
+    triage.ignored = desired and true or nil
+    if desired then
+        triage.ignoredAt = now
+        triage.ignoredClearedAt = nil
+    else
+        triage.ignoredClearedAt = now
+    end
+    markTriageChanged(desired and "ignored" or "ignored-cleared")
+    return desired
 end
 
 function Storage.RecordBaselineSample(identity, channelKey, sample, now)

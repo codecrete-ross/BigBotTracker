@@ -420,6 +420,10 @@ assertTruthy(scoreHeader, "score header state")
 assertEqual(scoreHeader.label, "Score", "header label should not include sort marker text")
 assertTruthy(scoreHeader.arrowShown, "active sort header should show arrow")
 assertEqual(scoreHeader.arrowTexCoord, "0,1,1,0", "descending sort arrow orientation")
+local watchHeader = BBT.UI.GetHeaderState("watch")
+assertTruthy(watchHeader, "watch header state")
+assertEqual(watchHeader.arrowShown, false, "watch action column should not show a sort arrow")
+assertEqual(watchHeader.activeShown, false, "watch action column should not be an active sort header")
 
 local function send(sender, text, seconds)
     fakeNow = fakeNow + (seconds or 0)
@@ -494,6 +498,7 @@ local beforeReload = {
     persistence = seller.score.familyScores.persistence,
     baseline = seller.score.familyScores.baseline,
 }
+seller.triage = nil
 BBT.runtime = nil
 BBT.Storage.Initialize()
 assertTruthy(BBT.runtime and BBT.runtime.pretrack, "reload should recreate runtime buffers")
@@ -507,6 +512,9 @@ assertEqual(seller.score.familyScores.content, beforeReload.content, "reload sho
 assertEqual(seller.score.familyScores.activity, beforeReload.activity, "reload should not change activity family")
 assertEqual(seller.score.familyScores.persistence, beforeReload.persistence, "reload should not change persistence family")
 assertEqual(seller.score.familyScores.baseline, beforeReload.baseline, "reload should not change baseline family")
+assertEqual(BBT.Storage.IsCandidateWatched(seller), false, "reload should default missing watched state")
+assertEqual(BBT.Storage.IsCandidateReported(seller), false, "reload should default missing reported state")
+assertEqual(BBT.Storage.IsCandidateIgnored(seller), false, "reload should default missing ignored state")
 
 local originalSellerTier = seller.score.tier
 BBT.UI.SelectCandidate(seller)
@@ -541,9 +549,12 @@ assertTruthy(reportAssist.bullets[1]:find("Suspicious", 1, true), "assist bullet
 local reportOpenCountBeforeClick = ReportFrame.openCount
 _G.BigBotTrackerFrame.reportButton.scripts.OnClick(_G.BigBotTrackerFrame.reportButton)
 assertEqual(ReportFrame.openCount, reportOpenCountBeforeClick + 1, "report click should open Blizzard report frame")
+assertEqual(BBT.Storage.IsCandidateReported(seller), true, "successful report open should mark candidate reported")
+assertEqual(seller.triage.reportOpenCount, 1, "successful report open should increment report-open count")
 local assistState = BBT.UI.GetReportAssistState()
 assertEqual(assistState.shown, true, "report click should show Big Bot Tracker assist dialog")
 assertEqual(assistState.comment, reportComment, "assist dialog should show selectable report comment")
+assertEqual(assistState.clearReportedEnabled, true, "assist dialog should allow clearing reported status")
 assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.multiLine, true, "assist comment field should be multiline")
 assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.template, nil, "assist comment field should not use single-line input template")
 assertEqual(_G.BigBotTrackerReportAssistFrame.body, nil, "assist dialog should not use a masking body overlay")
@@ -552,6 +563,13 @@ assertTruthy(assistState.bullets[1]:find("Suspicious", 1, true), "assist dialog 
 _G.BigBotTrackerReportAssistFrame.selectButton.scripts.OnClick(_G.BigBotTrackerReportAssistFrame.selectButton)
 assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.focused, true, "select button should focus comment field")
 assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.highlighted, true, "select button should highlight comment field")
+_G.BigBotTrackerReportAssistFrame.clearReportedButton.scripts.OnClick(_G.BigBotTrackerReportAssistFrame.clearReportedButton)
+assertEqual(BBT.Storage.IsCandidateReported(seller), false, "assist should clear reported status")
+BBT.Storage.MarkReported(seller)
+assertEqual(BBT.Storage.IsCandidateReported(seller), true, "manual mark should set reported status")
+assertEqual(seller.triage.reportOpenCount, 1, "manual mark should not increment report-open count")
+BBT.Storage.ClearReported(seller)
+assertEqual(BBT.Storage.IsCandidateReported(seller), false, "manual clear should unset reported status")
 
 local reportDiagnostic = seller.lastReportDiagnostic
 assertEqual(reportDiagnostic.source, "guid", "guid should be used when target is unavailable")
@@ -566,6 +584,7 @@ BBT.UI.SelectCandidate(seller)
 _G.BigBotTrackerFrame.reportButton.scripts.OnClick(_G.BigBotTrackerFrame.reportButton)
 local blockedDiagnostic = seller.lastReportDiagnostic
 assertEqual(ReportFrame.openCount, reportOpenCount, "chat line fallback should not open report frame")
+assertEqual(BBT.Storage.IsCandidateReported(seller), false, "failed report open should not mark candidate reported")
 assistState = BBT.UI.GetReportAssistState()
 assertEqual(assistState.shown, true, "failed report open should keep assist dialog visible")
 assertTruthy(assistState.status:find("No reportable in-world player location", 1, true), "assist dialog should show diagnostic failure reason")
@@ -666,6 +685,41 @@ send("Mirror-Area52", "WTS raid boost now", 60)
 assertTruthy(BBT.Storage.GetCandidate("Mirror-Illidan"), "illidan mirror candidate")
 assertTruthy(BBT.Storage.GetCandidate("Mirror-Area52"), "area52 mirror candidate")
 
+local function containsCandidate(candidates, target)
+    for _, candidate in ipairs(candidates or {}) do
+        if candidate == target or candidate.fullKey == target.fullKey then
+            return true
+        end
+    end
+    return false
+end
+
+BBT.Storage.MarkReported(seller)
+BBT.UI.SetFilter("active")
+assertEqual(containsCandidate(BBT.UI.FilterCandidates(BBT.Storage.GetAllCandidates()), seller), false, "active filter should hide reported candidates")
+BBT.Storage.SetWatched(seller, true)
+assertEqual(containsCandidate(BBT.UI.FilterCandidates(BBT.Storage.GetAllCandidates()), seller), true, "watched should override active filter hiding")
+BBT.Storage.SetWatched(seller, false)
+BBT.Storage.ClearReported(seller)
+
+BBT.Storage.SetIgnored(switchy, true)
+local ignoredMessageCount = switchy.totalMessages
+send("Switchy-Area52", "selling raid boost pst", 120)
+assertEqual(switchy.totalMessages, ignoredMessageCount + 1, "ignored candidates should keep accumulating evidence")
+BBT.UI.SetFilter("active")
+assertEqual(containsCandidate(BBT.UI.FilterCandidates(BBT.Storage.GetAllCandidates()), switchy), false, "active filter should hide ignored candidates")
+BBT.Storage.SetWatched(switchy, true)
+assertEqual(containsCandidate(BBT.UI.FilterCandidates(BBT.Storage.GetAllCandidates()), switchy), true, "watched should keep ignored candidates visible")
+BBT.UI.SetFilter("watched")
+BBT.UI.Refresh()
+local watchedRow = BBT.UI.GetRowState(1)
+assertTruthy(watchedRow and watchedRow.candidate and watchedRow.candidate.fullKey == switchy.fullKey, "watched filter should show watched candidate")
+assertTruthy(watchedRow.watchText ~= "", "watched row should expose a watch toggle")
+assertEqual(BBT.UI.ClickRowWatch(1), true, "row watch button should be clickable")
+assertEqual(BBT.Storage.IsCandidateWatched(switchy), false, "row watch button should toggle watched state off")
+BBT.Storage.SetIgnored(switchy, false)
+BBT.UI.SetFilter("active")
+
 assertEqual(
     BBT.UI.GetCadenceDisplay({
         timing = {
@@ -763,6 +817,10 @@ local cadenceSorted = BBT.UI.SortCandidates({
     },
 })
 assertEqual(cadenceSorted[1].displayName, "Regular-Area52", "cadence sort uses deterministic severity order")
+
+BBT.UI.SetSort("watch", true)
+local sortKeyAfterWatch = BBT.UI.GetSortState()
+assertEqual(sortKeyAfterWatch, "score", "watch action column should not become the active sort")
 
 for _, key in ipairs(BBT.UI.GetColumnKeys()) do
     BBT.UI.SetSort(key, true)

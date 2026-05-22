@@ -23,17 +23,28 @@ Message count alone is not treated as suspicion. Network sync can create `Prelim
 
 Open the report with `/bbt`, `/bbt open`, `/bbt show`, `/bigbottracker`, or the addon compartment button.
 
-The table shows character-realm, tier, score, confidence, first/last seen, message count, posts per hour, average interval, cadence, template reuse, and source: `Local`, `Net`, or `L+N`.
+The table shows a watch toggle, character-realm, tier, score, confidence, first/last seen, message count, posts per hour, average interval, cadence, template reuse, and source: `Local`, `Net`, or `L+N`.
 
 Selecting a row shows detail sections for summary, activity, timing, content, evidence families, current-channel baseline, network context, and top evidence reasons. Click headers to sort and hover rows or headers for field explanations.
 
-Critical candidates show a `Report` button. It opens Big Bot Tracker's report assist and tries to open Blizzard's in-world report flow when a reportable player location is available. You must choose the Blizzard category, review or paste any text, and submit manually.
+Critical candidates show a `Report` button. It opens Big Bot Tracker's report assist and tries to open Blizzard's in-world report flow when a reportable player location is available. A successful report-frame open marks the candidate `Reported` locally, but you can clear that status from the assist window or candidate detail if the flow was opened by mistake or not completed. You must choose the Blizzard category, review or paste any text, and submit manually.
+
+The report window defaults to the `Active` filter, which hides locally handled candidates. Handled means `Reported` or `Ignored`. The eye button marks a candidate `Watched`, keeping it visible in `Active` even if it is otherwise handled. These triage states are local, non-destructive display state only; they do not change score, confidence, tier, sync, or stored evidence.
+
+Available filters:
+
+- `All` shows every stored candidate
+- `Active` shows unhandled candidates plus watched candidates
+- `Watched` shows watched candidates
+- `Reported` shows candidates marked reported
+- `Ignored` shows ignored candidates
 
 Other report controls:
 
 - `Refresh` rebuilds the visible report
 - `Export` saves a compact debug summary in SavedVariables
 - `Sync` enables or disables evidence sharing
+- `Watch`, `Ignore`, `Mark Reported`, and `Clear Reported` manage local triage state for the selected candidate
 - `Clear Buffers` clears temporary unpromoted scan buffers
 - `Purge Selected` deletes the selected candidate's saved evidence
 - `Purge All` deletes saved candidate evidence

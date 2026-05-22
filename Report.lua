@@ -624,5 +624,8 @@ function Report.OpenBottingReport(candidate)
 
     diagnostic.reason = "Opened Blizzard report frame."
     writeDiagnostic(candidate, diagnostic)
+    if BBT.Storage and BBT.Storage.MarkReported then
+        BBT.Storage.MarkReported(candidate, Util.GetNow(), true)
+    end
     return true, diagnostic
 end
