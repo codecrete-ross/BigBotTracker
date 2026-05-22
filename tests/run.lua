@@ -27,7 +27,16 @@ local function makeWidget()
     function widget:GetHeight()
         return self.height or 0
     end
-    function widget:SetPoint() end
+    function widget:SetPoint(point, relativeTo, relativePoint, x, y)
+        self.points = self.points or {}
+        self.points[#self.points + 1] = {
+            point = point,
+            relativeTo = relativeTo,
+            relativePoint = relativePoint,
+            x = x or 0,
+            y = y or 0,
+        }
+    end
     function widget:SetMovable() end
     function widget:SetClampedToScreen() end
     function widget:EnableMouse() end
@@ -297,6 +306,10 @@ local function countSpecialFrame(name)
 end
 
 assertTruthy(_G.BigBotTrackerFrame, "named UI frame should be globally addressable")
+assertEqual(_G.BigBotTrackerFrame.width, 1180, "report frame width")
+assertEqual(_G.BigBotTrackerFrame.height, 900, "report frame height")
+assertTruthy(_G.BigBotTrackerFrame.title.points and _G.BigBotTrackerFrame.title.points[1], "report title anchor")
+assertEqual(_G.BigBotTrackerFrame.title.points[1].y, -36, "report title top padding")
 assertEqual(_G.BigBotTrackerFrame.frameStrata, "DIALOG", "report frame strata")
 assertEqual(_G.BigBotTrackerFrame.frameLevel, 100, "report frame level")
 assertEqual(_G.BigBotTrackerFrame.topLevel, true, "report frame should be top-level")
