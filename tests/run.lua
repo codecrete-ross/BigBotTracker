@@ -27,6 +27,9 @@ local function makeWidget()
     function widget:GetHeight()
         return self.height or 0
     end
+    function widget:ClearAllPoints()
+        self.points = {}
+    end
     function widget:SetPoint(point, relativeTo, relativePoint, x, y)
         self.points = self.points or {}
         self.points[#self.points + 1] = {
@@ -42,6 +45,15 @@ local function makeWidget()
     function widget:EnableMouse() end
     function widget:EnableMouseWheel() end
     function widget:RegisterForDrag() end
+    function widget:SetFontObject(fontObject)
+        self.fontObject = fontObject
+    end
+    function widget:SetJustifyH(justifyH)
+        self.justifyH = justifyH
+    end
+    function widget:SetJustifyV(justifyV)
+        self.justifyV = justifyV
+    end
     function widget:SetFrameStrata(strata)
         self.frameStrata = strata
     end
@@ -104,12 +116,48 @@ local function makeWidget()
     function widget:GetVerticalScroll()
         return self.verticalScroll or 0
     end
+    function widget:SetAutoFocus(autoFocus)
+        self.autoFocus = autoFocus
+    end
+    function widget:SetMaxLetters(maxLetters)
+        self.maxLetters = maxLetters
+    end
+    function widget:SetMultiLine(multiLine)
+        self.multiLine = multiLine
+    end
+    function widget:SetTextInsets(left, right, top, bottom)
+        self.textInsets = { left = left, right = right, top = top, bottom = bottom }
+    end
+    function widget:SetCursorPosition(position)
+        self.cursorPosition = position
+    end
+    function widget:SetFocus()
+        self.focused = true
+    end
+    function widget:ClearFocus()
+        self.focused = false
+    end
+    function widget:HighlightText()
+        self.highlighted = true
+    end
+    function widget:GetText()
+        return self.text or ""
+    end
     function widget:CreateFontString()
         local font = makeWidget()
-        function font:SetJustifyH() end
-        function font:SetWidth() end
-        function font:SetWordWrap() end
+        function font:SetWidth(width)
+            self.width = width
+        end
+        function font:SetWordWrap(wordWrap)
+            self.wordWrap = wordWrap
+        end
         function font:SetTextColor() end
+        function font:GetText()
+            return self.text or ""
+        end
+        function font:GetStringWidth()
+            return #(self.text or "") * 8
+        end
         function font:SetText(text)
             self.text = text
         end
@@ -131,6 +179,10 @@ local function makeWidget()
         return texture
     end
     function widget:SetText(text)
+        text = tostring(text or "")
+        if self.maxLetters and #text > self.maxLetters then
+            text = text:sub(1, self.maxLetters)
+        end
         self.text = text
     end
     widget.StartMoving = function() end
@@ -422,8 +474,40 @@ reportState = BBT.UI.GetReportControlState()
 assertEqual(reportState.reportShown, true, "botting report action should show for Critical candidates")
 assertEqual(reportState.reportEnabled, true, "botting report action should enable for Critical candidates")
 
-local openedReport, reportDiagnostic = BBT.Report.OpenBottingReport(seller)
-assertEqual(openedReport, true, "reportable guid should open in-world botting report frame")
+local reportComment = BBT.Report.BuildReportComment(seller)
+assertEqual(reportComment:sub(1, 16), "Big Bot Tracker:", "report comment should cite addon source")
+assertTruthy(#reportComment <= BBT.Report.REPORT_COMMENT_LIMIT, "report comment should fit Blizzard limit")
+assertTruthy(reportComment:find("Suspected automated", 1, true), "report comment should use report language")
+assertTruthy(reportComment:find("interval", 1, true), "report comment should prioritize interval")
+assertEqual(reportComment:find("near", 1, true), nil, "report comment should avoid near-metric wording")
+assertEqual(reportComment:find("cadence", 1, true), nil, "report comment should avoid cadence jargon")
+assertTruthy(reportComment:find("posts", 1, true), "report comment should include observation volume")
+assertTruthy(reportComment:find("reused text", 1, true), "report comment should include content reuse")
+assertTruthy(reportComment:find("%% confidence"), "report comment should include percentage confidence")
+assertEqual(reportComment:find("score", 1, true), nil, "report comment should not include score")
+assertEqual(reportComment:find("WTS", 1, true), nil, "report comment should not include raw chat text")
+
+local reportAssist = BBT.Report.BuildReportAssist(seller)
+assertEqual(reportAssist.comment, reportComment, "assist should reuse report comment")
+assertTruthy(#reportAssist.bullets >= 2, "assist should include evidence bullets")
+assertTruthy(reportAssist.bullets[1]:find("Suspicious", 1, true), "assist bullets should label suspicious behavior")
+
+local reportOpenCountBeforeClick = ReportFrame.openCount
+_G.BigBotTrackerFrame.reportButton.scripts.OnClick(_G.BigBotTrackerFrame.reportButton)
+assertEqual(ReportFrame.openCount, reportOpenCountBeforeClick + 1, "report click should open Blizzard report frame")
+local assistState = BBT.UI.GetReportAssistState()
+assertEqual(assistState.shown, true, "report click should show Big Bot Tracker assist dialog")
+assertEqual(assistState.comment, reportComment, "assist dialog should show selectable report comment")
+assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.multiLine, true, "assist comment field should be multiline")
+assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.template, nil, "assist comment field should not use single-line input template")
+assertEqual(_G.BigBotTrackerReportAssistFrame.body, nil, "assist dialog should not use a masking body overlay")
+assertTruthy(assistState.status:find("Blizzard report opened", 1, true), "assist dialog should show opened status")
+assertTruthy(assistState.bullets[1]:find("Suspicious", 1, true), "assist dialog should show evidence bullets")
+_G.BigBotTrackerReportAssistFrame.selectButton.scripts.OnClick(_G.BigBotTrackerReportAssistFrame.selectButton)
+assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.focused, true, "select button should focus comment field")
+assertEqual(_G.BigBotTrackerReportAssistFrame.commentEdit.highlighted, true, "select button should highlight comment field")
+
+local reportDiagnostic = seller.lastReportDiagnostic
 assertEqual(reportDiagnostic.source, "guid", "guid should be used when target is unavailable")
 assertEqual(ReportFrame.lastReport.reportInfo.reportType, Enum.ReportType.InWorld, "report flow should use InWorld type")
 assertEqual(ReportFrame.lastReport.playerName, seller.displayName, "report frame should receive candidate name")
@@ -432,9 +516,13 @@ assertEqual(seller.lastReportDiagnostic.canOpen, true, "candidate should retain 
 local reportOpenCount = ReportFrame.openCount
 seller.lastGuid = "blocked-guid"
 seller.lastLineID = 987654
-local blockedReport, blockedDiagnostic = BBT.Report.OpenBottingReport(seller)
-assertEqual(blockedReport, false, "unreportable guid should not open report frame")
+BBT.UI.SelectCandidate(seller)
+_G.BigBotTrackerFrame.reportButton.scripts.OnClick(_G.BigBotTrackerFrame.reportButton)
+local blockedDiagnostic = seller.lastReportDiagnostic
 assertEqual(ReportFrame.openCount, reportOpenCount, "chat line fallback should not open report frame")
+assistState = BBT.UI.GetReportAssistState()
+assertEqual(assistState.shown, true, "failed report open should keep assist dialog visible")
+assertTruthy(assistState.status:find("No reportable in-world player location", 1, true), "assist dialog should show diagnostic failure reason")
 assertEqual(blockedDiagnostic.guidCanReport, false, "blocked guid should be diagnosed")
 assertEqual(blockedDiagnostic.chatLineCanReport, true, "chat-line reportability should be diagnostic only")
 assertEqual(blockedDiagnostic.canOpen, false, "blocked guid should not be openable")

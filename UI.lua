@@ -10,8 +10,11 @@ local Storage = BBT.Storage
 local Report = BBT.Report
 
 local FRAME_NAME = "BigBotTrackerFrame"
+local REPORT_ASSIST_FRAME_NAME = "BigBotTrackerReportAssistFrame"
 local FRAME_WIDTH = 1180
 local FRAME_HEIGHT = 900
+local REPORT_ASSIST_WIDTH = 520
+local REPORT_ASSIST_HEIGHT = 420
 local OUTER_MARGIN = 20
 local TABLE_CONTENT_WIDTH = 1120
 local TABLE_VIEW_WIDTH = 1120
@@ -36,6 +39,7 @@ local emptyState
 local headerButtons = {}
 local rows = {}
 local detail = {}
+local reportAssistFrame
 local selectedCandidate
 local selectedKey
 local dirty = false
@@ -204,6 +208,14 @@ local function createButton(parent, text, width, height)
     return button
 end
 
+local function addDivider(parent, x, y, width)
+    local divider = parent:CreateTexture(nil, "ARTWORK")
+    divider:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    divider:SetSize(width, 1)
+    divider:SetColorTexture(1, 0.82, 0, 0.28)
+    return divider
+end
+
 local function setTextColor(font, color)
     if font and font.SetTextColor and color then
         font:SetTextColor(color[1], color[2], color[3])
@@ -229,18 +241,22 @@ local function raiseFrame()
     end
 end
 
-local function registerEscapeClose()
+local function registerSpecialFrame(targetFrameName)
     if type(UISpecialFrames) ~= "table" then
         return
     end
 
-    for _, frameName in ipairs(UISpecialFrames) do
-        if frameName == FRAME_NAME then
+    for _, registeredFrameName in ipairs(UISpecialFrames) do
+        if registeredFrameName == targetFrameName then
             return
         end
     end
 
-    table.insert(UISpecialFrames, FRAME_NAME)
+    table.insert(UISpecialFrames, targetFrameName)
+end
+
+local function registerEscapeClose()
+    registerSpecialFrame(FRAME_NAME)
 end
 
 local function bindTooltip(owner, title, lines)
@@ -667,6 +683,347 @@ local function positionReportButton()
     detail.reportButton:SetPoint("LEFT", detail.title, "LEFT", titleWidth + DETAIL_TITLE_BUTTON_GAP, 0)
 end
 
+local openReportAssistForCandidate
+
+local function positionReportAssistFrame()
+    if not reportAssistFrame then
+        return
+    end
+
+    if reportAssistFrame.ClearAllPoints then
+        reportAssistFrame:ClearAllPoints()
+    end
+
+    if ReportFrame then
+        reportAssistFrame:SetPoint("TOPLEFT", ReportFrame, "TOPRIGHT", 14, 0)
+    else
+        reportAssistFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    end
+end
+
+local function setReportAssistStatus(opened, diagnostic)
+    if not reportAssistFrame or not reportAssistFrame.statusText then
+        return
+    end
+
+    if opened then
+        reportAssistFrame.statusText:SetText(
+            "Blizzard report opened. Paste the selected comment, then submit manually."
+        )
+        setTextColor(reportAssistFrame.statusText, { 0.66, 1.00, 0.66 })
+    else
+        local reason = diagnostic and diagnostic.reason or "unknown"
+        reportAssistFrame.statusText:SetText("Blizzard report did not open: " .. tostring(reason))
+        setTextColor(reportAssistFrame.statusText, { 1.00, 0.74, 0.32 })
+    end
+end
+
+local function setReportAssistComment(comment)
+    if not reportAssistFrame or not reportAssistFrame.commentEdit then
+        return
+    end
+
+    local editBox = reportAssistFrame.commentEdit
+    if editBox.SetMaxLetters then
+        editBox:SetMaxLetters(Report and Report.REPORT_COMMENT_LIMIT or 127)
+    end
+    editBox:SetText(comment or "")
+    if editBox.SetCursorPosition then
+        editBox:SetCursorPosition(0)
+    end
+end
+
+local function selectReportAssistText()
+    if not reportAssistFrame or not reportAssistFrame.commentEdit then
+        return
+    end
+
+    local editBox = reportAssistFrame.commentEdit
+    if editBox.SetFocus then
+        editBox:SetFocus()
+    end
+    if editBox.HighlightText then
+        editBox:HighlightText()
+    end
+end
+
+local function createReportAssistFrame()
+    if reportAssistFrame then
+        return reportAssistFrame
+    end
+
+    reportAssistFrame = CreateFrame("Frame", REPORT_ASSIST_FRAME_NAME, UIParent, "BasicFrameTemplateWithInset")
+    reportAssistFrame:SetSize(REPORT_ASSIST_WIDTH, REPORT_ASSIST_HEIGHT)
+    if reportAssistFrame.SetFrameStrata then
+        reportAssistFrame:SetFrameStrata("DIALOG")
+    end
+    if reportAssistFrame.SetFrameLevel then
+        reportAssistFrame:SetFrameLevel(130)
+    end
+    if reportAssistFrame.SetToplevel then
+        reportAssistFrame:SetToplevel(true)
+    end
+    reportAssistFrame:SetMovable(true)
+    reportAssistFrame:SetClampedToScreen(true)
+    reportAssistFrame:EnableMouse(true)
+    reportAssistFrame:RegisterForDrag("LeftButton")
+    reportAssistFrame:SetScript("OnMouseDown", function(self)
+        if self.Raise then
+            self:Raise()
+        end
+    end)
+    reportAssistFrame:SetScript("OnDragStart", function(self)
+        if self.Raise then
+            self:Raise()
+        end
+        self:StartMoving()
+    end)
+    reportAssistFrame:SetScript("OnDragStop", reportAssistFrame.StopMovingOrSizing)
+    reportAssistFrame:Hide()
+    registerSpecialFrame(REPORT_ASSIST_FRAME_NAME)
+
+    local title = createFont(
+        reportAssistFrame,
+        "OVERLAY",
+        "GameFontHighlightLarge",
+        "TOPLEFT",
+        reportAssistFrame,
+        "TOPLEFT",
+        OUTER_MARGIN,
+        TITLE_TOP
+    )
+    title:SetText("Big Bot Tracker Report Assist")
+    reportAssistFrame.title = title
+
+    local subtitle = createFont(
+        reportAssistFrame,
+        "OVERLAY",
+        "GameFontDisableSmall",
+        "TOPLEFT",
+        reportAssistFrame,
+        "TOPLEFT",
+        OUTER_MARGIN,
+        SUBTITLE_TOP
+    )
+    subtitle:SetWidth(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2))
+    subtitle:SetText("Local guidance for Blizzard's manual report flow.")
+    reportAssistFrame.subtitle = subtitle
+
+    local assistStatus = CreateFrame("Frame", nil, reportAssistFrame)
+    assistStatus:SetPoint("TOPLEFT", reportAssistFrame, "TOPLEFT", OUTER_MARGIN, STATUS_TOP)
+    assistStatus:SetSize(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2), 24)
+    assistStatus:EnableMouse(true)
+    reportAssistFrame.assistStatusFrame = assistStatus
+
+    local statusBg = assistStatus:CreateTexture(nil, "BACKGROUND")
+    statusBg:SetAllPoints(assistStatus)
+    statusBg:SetColorTexture(0.05, 0.05, 0.06, 0.58)
+    assistStatus.bg = statusBg
+
+    local instruction = createFont(
+        assistStatus,
+        "OVERLAY",
+        "GameFontNormalSmall",
+        "LEFT",
+        assistStatus,
+        "LEFT",
+        8,
+        0
+    )
+    instruction:SetWidth(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2) - 16)
+    instruction:SetText("In Blizzard's report window, select Cheating > Botting.")
+    reportAssistFrame.instruction = instruction
+
+    local commentLabel = createFont(
+        reportAssistFrame,
+        "OVERLAY",
+        "GameFontNormalSmall",
+        "TOPLEFT",
+        reportAssistFrame,
+        "TOPLEFT",
+        OUTER_MARGIN,
+        -138
+    )
+    commentLabel:SetText("Selectable report comment")
+    reportAssistFrame.commentLabel = commentLabel
+
+    local commentCount = createFont(
+        reportAssistFrame,
+        "OVERLAY",
+        "GameFontDisableSmall",
+        "TOPRIGHT",
+        reportAssistFrame,
+        "TOPRIGHT",
+        -OUTER_MARGIN,
+        -138
+    )
+    commentCount:SetJustifyH("RIGHT")
+    commentCount:SetWidth(90)
+    reportAssistFrame.commentCount = commentCount
+    reportAssistFrame.commentDivider =
+        addDivider(reportAssistFrame, OUTER_MARGIN, -155, REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2))
+
+    local commentBox = CreateFrame("Frame", nil, reportAssistFrame)
+    commentBox:SetPoint("TOPLEFT", reportAssistFrame, "TOPLEFT", OUTER_MARGIN, -164)
+    commentBox:SetSize(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2), 70)
+    reportAssistFrame.commentBox = commentBox
+
+    local commentBg = commentBox:CreateTexture(nil, "BACKGROUND")
+    commentBg:SetAllPoints(commentBox)
+    commentBg:SetColorTexture(0.05, 0.05, 0.06, 0.58)
+    commentBox.bg = commentBg
+
+    local commentEdit = CreateFrame("EditBox", nil, commentBox)
+    commentEdit:SetPoint("TOPLEFT", commentBox, "TOPLEFT", 8, -7)
+    commentEdit:SetSize(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2) - 16, 56)
+    if commentEdit.SetAutoFocus then
+        commentEdit:SetAutoFocus(false)
+    end
+    if commentEdit.SetMultiLine then
+        commentEdit:SetMultiLine(true)
+    end
+    if commentEdit.SetFontObject and GameFontHighlightSmall then
+        commentEdit:SetFontObject(GameFontHighlightSmall)
+    end
+    if commentEdit.SetJustifyH then
+        commentEdit:SetJustifyH("LEFT")
+    end
+    if commentEdit.SetJustifyV then
+        commentEdit:SetJustifyV("TOP")
+    end
+    if commentEdit.SetTextInsets then
+        commentEdit:SetTextInsets(0, 0, 0, 0)
+    end
+    commentEdit:SetScript("OnEscapePressed", function(self)
+        if self.ClearFocus then
+            self:ClearFocus()
+        end
+    end)
+    reportAssistFrame.commentEdit = commentEdit
+
+    local evidenceHeader = createFont(
+        reportAssistFrame,
+        "OVERLAY",
+        "GameFontNormalSmall",
+        "TOPLEFT",
+        reportAssistFrame,
+        "TOPLEFT",
+        OUTER_MARGIN,
+        -252
+    )
+    evidenceHeader:SetText("Most meaningful suspicious behavior")
+    reportAssistFrame.evidenceHeader = evidenceHeader
+    reportAssistFrame.evidenceDivider =
+        addDivider(reportAssistFrame, OUTER_MARGIN, -269, REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2))
+
+    reportAssistFrame.bulletLines = {}
+    for index = 1, 4 do
+        local line = createFont(
+            reportAssistFrame,
+            "OVERLAY",
+            "GameFontHighlightSmall",
+            "TOPLEFT",
+            reportAssistFrame,
+            "TOPLEFT",
+            OUTER_MARGIN + 10,
+            -278 - ((index - 1) * 17)
+        )
+        line:SetWidth(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2) - 18)
+        line:SetWordWrap(false)
+        reportAssistFrame.bulletLines[index] = line
+    end
+
+    local statusText = createFont(
+        reportAssistFrame,
+        "OVERLAY",
+        "GameFontHighlightSmall",
+        "TOPLEFT",
+        reportAssistFrame,
+        "TOPLEFT",
+        OUTER_MARGIN,
+        -360
+    )
+    statusText:SetWidth(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2))
+    statusText:SetText("")
+    reportAssistFrame.statusText = statusText
+
+    local closeButton = createButton(reportAssistFrame, "Close", 72, 22)
+    closeButton:SetPoint("BOTTOMRIGHT", reportAssistFrame, "BOTTOMRIGHT", -OUTER_MARGIN, 16)
+    closeButton:SetScript("OnClick", function()
+        reportAssistFrame:Hide()
+    end)
+    reportAssistFrame.closeButton = closeButton
+
+    local openButton = createButton(reportAssistFrame, "Open/Retry Report", 128, 22)
+    openButton:SetPoint("RIGHT", closeButton, "LEFT", -8, 0)
+    openButton:SetScript("OnClick", function()
+        if reportAssistFrame and reportAssistFrame.candidate and openReportAssistForCandidate then
+            openReportAssistForCandidate(reportAssistFrame.candidate)
+        end
+    end)
+    reportAssistFrame.openButton = openButton
+
+    local selectButton = createButton(reportAssistFrame, "Select Text", 92, 22)
+    selectButton:SetPoint("RIGHT", openButton, "LEFT", -8, 0)
+    selectButton:SetScript("OnClick", selectReportAssistText)
+    reportAssistFrame.selectButton = selectButton
+
+    return reportAssistFrame
+end
+
+local function showReportAssist(candidate, opened, diagnostic)
+    if not Report or not Report.BuildReportAssist then
+        return
+    end
+
+    local assist = Report.BuildReportAssist(candidate)
+    local assistFrame = createReportAssistFrame()
+    assistFrame.candidate = candidate
+    assistFrame.diagnostic = diagnostic
+    assistFrame.opened = opened == true
+
+    assistFrame.instruction:SetText(assist.instruction or "In Blizzard's report window, select Cheating > Botting.")
+    setReportAssistComment(assist.comment)
+    assistFrame.commentCount:SetText(string.format("%d / %d", #(assist.comment or ""), assist.commentLimit or 127))
+
+    for index, line in ipairs(assistFrame.bulletLines or {}) do
+        local bullet = assist.bullets and assist.bullets[index]
+        line:SetText(bullet and ("- " .. bullet) or "")
+    end
+
+    setReportAssistStatus(opened, diagnostic)
+    positionReportAssistFrame()
+    assistFrame:Show()
+    if assistFrame.Raise then
+        assistFrame:Raise()
+    end
+end
+
+openReportAssistForCandidate = function(candidate)
+    if not candidate then
+        Util.Print("Select a candidate first.")
+        return false, nil
+    end
+    if not Report or not Report.OpenBottingReport then
+        Util.Print("Report helper unavailable.")
+        return false, nil
+    end
+    if not Report.IsCriticalCandidate(candidate) then
+        Util.Print("Report assist is available for Critical candidates only.")
+        return false, nil
+    end
+
+    local opened, diagnostic = Report.OpenBottingReport(candidate)
+    showReportAssist(candidate, opened, diagnostic)
+    if opened then
+        Util.Print("Opened Blizzard report frame. Select Cheating > Botting, paste the assist text, and review before submitting.")
+    else
+        Util.Print("Could not open botting report: " .. tostring(diagnostic and diagnostic.reason or "unknown"))
+    end
+    updateReportControls(candidate)
+    return opened, diagnostic
+end
+
 local function clearDetails()
     selectedCandidate = nil
     selectedKey = nil
@@ -819,6 +1176,10 @@ function UI.SelectCandidate(candidate)
     updateAllRowVisuals()
 end
 
+function UI.OpenSelectedReportAssist()
+    return openReportAssistForCandidate(selectedCandidate)
+end
+
 local function buttonIsShown(button)
     if not button then
         return false
@@ -833,6 +1194,31 @@ function UI.GetReportControlState()
     return {
         reportShown = buttonIsShown(detail.reportButton),
         reportEnabled = detail.reportButton and detail.reportButton.enabled == true or false,
+    }
+end
+
+function UI.GetReportAssistState()
+    local bullets = {}
+    if reportAssistFrame and reportAssistFrame.bulletLines then
+        for index, line in ipairs(reportAssistFrame.bulletLines) do
+            bullets[index] = line.text or ""
+        end
+    end
+
+    local comment = ""
+    if reportAssistFrame and reportAssistFrame.commentEdit then
+        if reportAssistFrame.commentEdit.GetText then
+            comment = reportAssistFrame.commentEdit:GetText()
+        else
+            comment = reportAssistFrame.commentEdit.text or ""
+        end
+    end
+
+    return {
+        shown = buttonIsShown(reportAssistFrame),
+        comment = comment,
+        status = reportAssistFrame and reportAssistFrame.statusText and reportAssistFrame.statusText.text or "",
+        bullets = bullets,
     }
 end
 
@@ -1083,32 +1469,14 @@ local function createDetails(parent)
     local reportButton = createButton(parent, "Report", 72, 22)
     reportButton:SetPoint("LEFT", detail.title, "LEFT", 160 + DETAIL_TITLE_BUTTON_GAP, 0)
     reportButton:SetScript("OnClick", function()
-        if not selectedCandidate then
-            Util.Print("Select a candidate first.")
-            return
-        end
-        if not Report or not Report.OpenBottingReport then
-            Util.Print("Report helper unavailable.")
-            return
-        end
-        if not Report.IsCriticalCandidate(selectedCandidate) then
-            Util.Print("Report assist is available for Critical candidates only.")
-            return
-        end
-
-        local opened, diagnostic = Report.OpenBottingReport(selectedCandidate)
-        if opened then
-            Util.Print("Opened Blizzard report frame. Select Cheating > Botting and review before submitting.")
-        else
-            Util.Print("Could not open botting report: " .. tostring(diagnostic and diagnostic.reason or "unknown"))
-        end
-        updateReportControls(selectedCandidate)
+        openReportAssistForCandidate(selectedCandidate)
     end)
     bindTooltip(reportButton, "Report", {
         "Opens Blizzard's in-world report flow for a Critical candidate when a reportable player location is available.",
         "The addon does not submit the report.",
     })
     detail.reportButton = reportButton
+    parent.reportButton = reportButton
     positionReportButton()
     updateReportControls(nil)
 

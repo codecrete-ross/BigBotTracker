@@ -7,7 +7,219 @@ BBT.Report = BBT.Report or {}
 local Report = BBT.Report
 local Util = BBT.Util
 
+local REPORT_COMMENT_LIMIT = 127
 local unpack = unpack or table.unpack
+
+Report.REPORT_COMMENT_LIMIT = REPORT_COMMENT_LIMIT
+
+local function truncate(value, limit)
+    value = tostring(value or "")
+    limit = limit or REPORT_COMMENT_LIMIT
+    if #value <= limit then
+        return value
+    end
+    return value:sub(1, math.max(0, limit - 3)) .. "..."
+end
+
+local function formatDurationCompact(seconds)
+    seconds = math.max(0, math.floor((tonumber(seconds) or 0) + 0.5))
+    if seconds < 60 then
+        return tostring(seconds) .. "s"
+    end
+    if seconds < 3600 then
+        local minutes = math.floor(seconds / 60)
+        local remainder = seconds % 60
+        if remainder == 0 then
+            return tostring(minutes) .. "m"
+        end
+        return string.format("%dm%02ds", minutes, remainder)
+    end
+    if seconds < 86400 then
+        local hours = math.floor(seconds / 3600)
+        local minutes = math.floor((seconds % 3600) / 60)
+        if minutes == 0 then
+            return tostring(hours) .. "h"
+        end
+        return string.format("%dh%02dm", hours, minutes)
+    end
+
+    local days = math.floor(seconds / 86400)
+    local hours = math.floor((seconds % 86400) / 3600)
+    if hours == 0 then
+        return tostring(days) .. "d"
+    end
+    return string.format("%dd%02dh", days, hours)
+end
+
+local function getActiveSpan(candidate)
+    local behavior = candidate and candidate.behavior or {}
+    if (behavior.activeSpan or 0) > 0 then
+        return behavior.activeSpan
+    end
+    if candidate and candidate.firstSeen and candidate.lastSeen and candidate.lastSeen > candidate.firstSeen then
+        return candidate.lastSeen - candidate.firstSeen
+    end
+    return 0
+end
+
+local function getBestRate(candidate)
+    local behavior = candidate and candidate.behavior or {}
+    local timing = candidate and candidate.timing or {}
+    local rate = behavior.postsPerHour or 0
+    for _, summary in pairs(timing.windowSummaries or {}) do
+        rate = math.max(rate, summary.postsPerHour or 0)
+    end
+    return rate
+end
+
+local function getDominantBucket(candidate)
+    local timing = candidate and candidate.timing or {}
+    return timing.dominantBuckets and timing.dominantBuckets[1] or nil
+end
+
+local function buildIntervalFragment(candidate)
+    local timing = candidate and candidate.timing or {}
+    local baseline = candidate and candidate.baseline or {}
+    local topBucket = getDominantBucket(candidate)
+    local interval = topBucket and topBucket.bucket or timing.medianInterval or timing.averageInterval or 0
+    local cadenceClass = timing.cadenceClass or timing.intervalConsistency
+
+    if topBucket and (topBucket.percent or 0) >= 60 and interval > 0 then
+        return string.format("~%s interval", formatDurationCompact(interval))
+    end
+
+    local regularCadence = cadenceClass == "Fixed Cadence"
+        or cadenceClass == "Jittered Cadence"
+        or cadenceClass == "Mixed Regular"
+    if regularCadence then
+        if interval > 0 then
+            return string.format("~%s interval", formatDurationCompact(interval))
+        end
+        return "regular posting interval"
+    end
+
+    if (baseline.regularityPercentile or 0) >= 95 then
+        return "highly regular timing"
+    end
+
+    return nil
+end
+
+local function buildVolumeFragment(candidate)
+    local messages = candidate and candidate.totalMessages or 0
+    if messages <= 0 then
+        return nil
+    end
+
+    local span = getActiveSpan(candidate)
+    if span >= 60 then
+        return string.format("%d posts in %s", messages, formatDurationCompact(span))
+    end
+    return tostring(messages) .. " posts"
+end
+
+local function buildReuseFragment(candidate)
+    local content = candidate and candidate.content or {}
+    local templateReuse = content.templateReusePercent or 0
+    local shingleReuse = content.shingleReusePercent or 0
+    local nearDuplicates = content.nearDuplicateCount or 0
+
+    if templateReuse >= 40 then
+        return string.format("%d%% reused text", math.floor(templateReuse + 0.5))
+    end
+    if shingleReuse >= 55 then
+        return string.format("%d%% similar wording", math.floor(shingleReuse + 0.5))
+    end
+    if nearDuplicates > 0 then
+        return tostring(nearDuplicates) .. " near-dupes"
+    end
+    return nil
+end
+
+local function buildPersistenceFragment(candidate)
+    local dayCount = Util.CountMap(candidate and candidate.daysSeen)
+    if dayCount >= 2 then
+        return string.format("observed %d days", dayCount)
+    end
+    return nil
+end
+
+local function buildRateFragment(candidate)
+    local rate = getBestRate(candidate)
+    if rate >= 15 then
+        return string.format("about %.0f posts/hr", rate)
+    end
+    return nil
+end
+
+local function buildConfidenceFragment(candidate)
+    local score = candidate and candidate.score or {}
+    local confidence = score.confidence or 0
+    if confidence > 0 then
+        return string.format("%d%% confidence", math.floor(confidence + 0.5))
+    end
+    return nil
+end
+
+local function addPart(parts, value)
+    if value and value ~= "" then
+        parts[#parts + 1] = value
+    end
+end
+
+local function renderReportComment(base, parts, confidencePart)
+    local allParts = {}
+    for _, part in ipairs(parts) do
+        allParts[#allParts + 1] = part
+    end
+    if confidencePart then
+        allParts[#allParts + 1] = confidencePart
+    end
+
+    if #allParts == 0 then
+        return base .. "."
+    end
+    return base .. ": " .. table.concat(allParts, ", ") .. "."
+end
+
+local function composeReportComment(parts, confidencePart)
+    local base = "Big Bot Tracker: Suspected automated trade ads"
+    local kept = {}
+
+    for _, part in ipairs(parts) do
+        kept[#kept + 1] = part
+        local candidate = renderReportComment(base, kept, confidencePart)
+        if #candidate > REPORT_COMMENT_LIMIT then
+            table.remove(kept)
+        end
+    end
+
+    local comment = renderReportComment(base, kept, confidencePart)
+    while #comment > REPORT_COMMENT_LIMIT and #kept > 0 do
+        table.remove(kept)
+        comment = renderReportComment(base, kept, confidencePart)
+    end
+
+    if #comment <= REPORT_COMMENT_LIMIT then
+        return comment
+    end
+    return truncate(comment, REPORT_COMMENT_LIMIT)
+end
+
+local function addEvidenceBullet(bullets, seen, text)
+    if not text or text == "" or #bullets >= 4 then
+        return
+    end
+    if seen[text] then
+        return
+    end
+    seen[text] = true
+    bullets[#bullets + 1] = text
+end
+
+local function plural(value, singular, pluralText)
+    return tostring(value) .. " " .. (value == 1 and singular or pluralText)
+end
 
 local function getReportEnums()
     local enum = _G.Enum or {}
@@ -182,6 +394,94 @@ end
 
 function Report.IsCriticalCandidate(candidate)
     return candidate and candidate.score and candidate.score.tier == "Critical"
+end
+
+function Report.BuildReportComment(candidate)
+    local parts = {}
+    addPart(parts, buildIntervalFragment(candidate))
+    addPart(parts, buildVolumeFragment(candidate))
+    addPart(parts, buildReuseFragment(candidate))
+    addPart(parts, buildPersistenceFragment(candidate))
+    addPart(parts, buildRateFragment(candidate))
+    return composeReportComment(parts, buildConfidenceFragment(candidate))
+end
+
+function Report.BuildReportAssist(candidate)
+    local timing = candidate and candidate.timing or {}
+    local content = candidate and candidate.content or {}
+    local score = candidate and candidate.score or {}
+    local bullets = {}
+    local seen = {}
+
+    local topBucket = getDominantBucket(candidate)
+    if topBucket and (topBucket.percent or 0) > 0 then
+        addEvidenceBullet(
+            bullets,
+            seen,
+            string.format(
+                "Suspicious cadence: %d%% of intervals were near %s.",
+                math.floor((topBucket.percent or 0) + 0.5),
+                formatDurationCompact(topBucket.bucket or timing.medianInterval or timing.averageInterval or 0)
+            )
+        )
+    elseif buildIntervalFragment(candidate) then
+        addEvidenceBullet(bullets, seen, "Suspicious timing: " .. buildIntervalFragment(candidate) .. ".")
+    end
+
+    local messages = candidate and candidate.totalMessages or 0
+    local activeSpan = getActiveSpan(candidate)
+    if messages > 0 then
+        local observed = string.format("Observed volume: %s", plural(messages, "message", "messages"))
+        if activeSpan >= 60 then
+            observed = observed .. " over " .. formatDurationCompact(activeSpan)
+        end
+        local dayCount = Util.CountMap(candidate and candidate.daysSeen)
+        if dayCount >= 2 then
+            observed = observed .. " across " .. plural(dayCount, "day", "days")
+        end
+        addEvidenceBullet(bullets, seen, observed .. ".")
+    end
+
+    local reuseDetails = {}
+    if (content.templateReusePercent or 0) >= 40 then
+        reuseDetails[#reuseDetails + 1] = string.format("%d%% reused text", math.floor((content.templateReusePercent or 0) + 0.5))
+    end
+    if (content.shingleReusePercent or 0) >= 55 then
+        reuseDetails[#reuseDetails + 1] = string.format("%d%% similar wording", math.floor((content.shingleReusePercent or 0) + 0.5))
+    end
+    if (content.nearDuplicateCount or 0) > 0 then
+        reuseDetails[#reuseDetails + 1] = plural(content.nearDuplicateCount or 0, "near-dupe", "near-dupes")
+    end
+    if #reuseDetails > 0 then
+        addEvidenceBullet(bullets, seen, "Repeated wording: " .. table.concat(reuseDetails, ", ") .. ".")
+    end
+
+    local rate = getBestRate(candidate)
+    if rate >= 15 then
+        addEvidenceBullet(bullets, seen, string.format("Posting rate: %.1f/hr in active windows.", rate))
+    end
+
+    for _, reason in ipairs(score.reasons or {}) do
+        addEvidenceBullet(bullets, seen, "Suspicious signal: " .. tostring(reason))
+    end
+
+    if #bullets < 2 then
+        addEvidenceBullet(
+            bullets,
+            seen,
+            string.format(
+                "Model context: local timing and repeated-ad evidence reached %d%% confidence.",
+                math.floor((score.confidence or 0) + 0.5)
+            )
+        )
+    end
+
+    return {
+        comment = Report.BuildReportComment(candidate),
+        commentLimit = REPORT_COMMENT_LIMIT,
+        instruction = "In Blizzard's report window, select Cheating > Botting.",
+        bullets = bullets,
+    }
 end
 
 function Report.GetDiagnostics(candidate)
