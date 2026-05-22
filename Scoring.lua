@@ -514,7 +514,7 @@ local function scoreContent(candidate, reasons)
 
     if templateReuse >= 80 then
         score = score + 13
-        addWeightedReason(reasons, 13, string.format("%d%% of messages match the top template.", templateReuse))
+        addWeightedReason(reasons, 13, string.format("%d%% of local messages reuse the same text pattern.", templateReuse))
     elseif templateReuse >= 60 then
         score = score + 9
         addWeightedReason(reasons, 9, "Most messages reuse the same exact template.")
@@ -559,10 +559,10 @@ local function scoreActivity(candidate, reasons)
 
     if rate >= 60 then
         score = score + 10
-        addWeightedReason(reasons, 10, string.format("%.1f posts per hour observed in active windows.", rate))
+        addWeightedReason(reasons, 10, string.format("Peak active-window rate was %.1f posts/hour.", rate))
     elseif rate >= 30 then
         score = score + 7
-        addWeightedReason(reasons, 7, string.format("%.1f posts per hour observed.", rate))
+        addWeightedReason(reasons, 7, string.format("Posting rate was %.1f posts/hour.", rate))
     elseif rate >= 15 then
         score = score + 4
     end
@@ -616,14 +616,14 @@ local function scoreBaseline(candidate, reasons)
 
     if regularityPercentile >= 95 then
         score = score + 6
-        addWeightedReason(reasons, 6, "Timing is more regular than 95% of monitored advertisers.")
+        addWeightedReason(reasons, 6, "Timing regularity is above the 95th percentile for the local channel baseline.")
     elseif regularityPercentile >= 90 then
         score = score + 4
     end
 
     if ratePercentile >= 95 then
         score = score + 5
-        addWeightedReason(reasons, 5, "Posting rate is unusually high for the current channel.")
+        addWeightedReason(reasons, 5, "Posting rate is unusually high for the local channel baseline.")
     elseif ratePercentile >= 90 then
         score = score + 3
     end

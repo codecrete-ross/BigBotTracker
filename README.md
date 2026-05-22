@@ -25,7 +25,9 @@ Open the report with `/bbt`, `/bbt open`, `/bbt show`, `/bigbottracker`, or the 
 
 The table shows a watch toggle, character-realm, tier, score, confidence, first/last seen, message count, posts per hour, average interval, cadence, template reuse, and source: `Local`, `Net`, or `L+N`.
 
-Selecting a row shows detail sections for summary, activity, timing, content, evidence families, current-channel baseline, network context, and top evidence reasons. Click headers to sort and hover rows or headers for field explanations.
+Selecting a row shows a plain-language assessment first, then detail sections for summary, activity, timing, content, local score breakdown, local channel baseline, peer evidence, and main signals. The assessment explains suspicion level and the strongest supporting metrics without treating the score as proof or a calibrated bot probability.
+
+The timing detail uses user-facing terms: common intervals hide one-off low-signal buckets, tiny retained buckets display as `<1%` instead of `0%`, and stable runs group repeated same-cadence phases so duplicate runs are easier to understand. Click headers to sort and hover rows or headers for field explanations.
 
 Critical candidates show a `Report` button. It opens Big Bot Tracker's report assist and tries to open Blizzard's in-world report flow when a reportable player location is available. A successful report-frame open marks the candidate `Reported` locally, but you can clear that status from the assist window or candidate detail if the flow was opened by mistake or not completed. You must choose the Blizzard category, review or paste any text, and submit manually.
 
@@ -51,7 +53,7 @@ Other report controls:
 
 ## Scores and Privacy
 
-Local scores are based on capped evidence families: timing regularity, content similarity, activity/bursts, persistence, and current-channel baseline outliers. High and Critical tiers require multiple local evidence families, and confidence depends on local evidence volume and diversity.
+Local scores are based on capped evidence families: timing regularity, content similarity, activity/bursts, persistence, and local channel baseline outliers. High and Critical tiers require multiple local evidence families, and confidence depends on local evidence volume and diversity.
 
 The addon does not persist or sync raw chat text. Saved and synced data is compact: identity, observation ranges/windows, counts, timing summaries, template and shingle hashes, behavior summaries, score snapshots, baseline bins, hashed peer IDs, and version fields.
 

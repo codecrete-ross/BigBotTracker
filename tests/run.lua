@@ -380,6 +380,20 @@ local function assertTruthy(value, label)
     end
 end
 
+local function assertContains(value, pattern, label)
+    value = tostring(value or "")
+    if not value:find(pattern, 1, true) then
+        error(string.format("%s: expected %q to contain %q", label, value, pattern), 2)
+    end
+end
+
+local function assertNotContains(value, pattern, label)
+    value = tostring(value or "")
+    if value:find(pattern, 1, true) then
+        error(string.format("%s: expected %q not to contain %q", label, value, pattern), 2)
+    end
+end
+
 loadModule("Util.lua")
 loadModule("Normalizer.lua")
 loadModule("Scoring.lua")
@@ -518,6 +532,35 @@ assertEqual(BBT.Storage.IsCandidateIgnored(seller), false, "reload should defaul
 
 local originalSellerTier = seller.score.tier
 BBT.UI.SelectCandidate(seller)
+local detailState = BBT.UI.GetDetailState()
+assertContains(detailState.assessment, "High suspicion", "detail summary should state high suspicion")
+assertContains(detailState.assessment, "same text reused", "detail summary should cite repeated text")
+assertContains(detailState.assessment, "Suspicion, not proof", "detail summary should keep suspicion caveat")
+assertNotContains(detailState.assessment, "% likely", "detail summary should not claim probability")
+assertNotContains(detailState.assessment, "confirmed", "detail summary should not confirm botting")
+assertNotContains(detailState.assessment, "WTS mythic", "detail summary should not include raw chat text")
+assertContains(detailState.groups.summary.lines[2], "Local Score", "detail should label local score")
+assertContains(detailState.groups.summary.lines[3], "Evidence Strength", "detail should label evidence strength")
+assertContains(detailState.groups.summary.lines[5], "Evidence Source", "detail should label evidence source")
+assertContains(detailState.groups.activity.lines[2], "First Flagged", "detail should label first flagged time")
+assertContains(detailState.groups.activity.lines[4], "Local Messages", "detail should label local messages")
+assertContains(detailState.groups.timing.lines[4], "Interval Variation", "detail should label interval variation")
+assertContains(detailState.groups.timing.lines[5], "Timing Entropy", "detail should label timing entropy")
+assertContains(detailState.groups.timing.lines[6], "Common Intervals", "detail should label common intervals")
+assertContains(detailState.groups.timing.lines[7], "Stable Runs", "detail should label stable runs")
+assertContains(detailState.groups.timing.lines[8], "Cadence Changes", "detail should label cadence changes")
+assertContains(detailState.groups.timing.lines[9], "Rate", "detail should label timing rate")
+assertContains(detailState.groups.content.lines[1], "Exact Text Reuse", "detail should label exact text reuse")
+assertContains(detailState.groups.content.lines[2], "Similar Wording", "detail should label similar wording")
+assertContains(detailState.groups.content.lines[5], "Ad-like Messages", "detail should label ad-like messages")
+assertContains(detailState.groups.families.header, "Local Score Breakdown", "detail should rename evidence families")
+assertContains(detailState.groups.families.lines[1], "Evidence Groups", "detail should label evidence groups")
+assertContains(detailState.groups.baseline.header, "Local Channel Baseline", "detail should rename baseline section")
+assertContains(detailState.groups.baseline.lines[2], "Baseline Samples", "detail should label baseline samples")
+assertContains(detailState.groups.baseline.lines[5], "Reuse vs Baseline", "detail should show reuse baseline")
+assertContains(detailState.groups.network.header, "Peer Evidence", "detail should rename network section")
+assertContains(detailState.groups.network.lines[4], "Local Score / Peer Signal", "detail should label peer signal")
+assertEqual(detailState.reasonHeader, "Main Signals", "detail should rename reasons header")
 local reportState = BBT.UI.GetReportControlState()
 assertEqual(reportState.reportShown, false, "botting report action should hide below Critical")
 
@@ -608,6 +651,11 @@ send("Switchy-Area52", "selling raid boost pst", 180)
 local switchy = BBT.Storage.GetCandidate("Switchy-Area52")
 assertTruthy((switchy.timing.cadenceSwitchCount or 0) >= 1, "schedule switch should be detected")
 assertEqual(BBT.UI.GetCadenceDisplay(switchy).label, "Mixed Regular", "schedule switch cadence label")
+BBT.UI.SelectCandidate(switchy)
+detailState = BBT.UI.GetDetailState()
+assertContains(detailState.groups.timing.lines[7], "~120s", "stable runs should show first cadence")
+assertContains(detailState.groups.timing.lines[7], "~180s", "stable runs should show changed cadence")
+BBT.UI.SelectCandidate(seller)
 
 send("Shorty-Area52", "ok", 60)
 send("Shorty-Area52", "ok", 60)
@@ -743,6 +791,112 @@ assertEqual(
     "Variable",
     "variable cadence label"
 )
+
+assertContains(
+    BBT.UI.BuildEvidenceSummary({
+        totalMessages = 0,
+        score = { tier = "Preliminary" },
+        network = { peerCount = 1 },
+    }),
+    "Preliminary peer signal",
+    "network-only summary should explain peer signal"
+)
+assertContains(
+    BBT.UI.BuildEvidenceSummary({
+        totalMessages = 1,
+        score = { tier = "Insufficient Data" },
+        network = {},
+    }),
+    "Not enough local evidence",
+    "insufficient summary should explain limited evidence"
+)
+
+local timingDisplay = {
+    displayName = "TimingDisplay-Area52",
+    fullKey = "timingdisplay-area52",
+    realmKey = "area52",
+    channels = { services = 244 },
+    daysSeen = { ["2026-05-22"] = true },
+    totalMessages = 244,
+    firstSeen = fakeNow - 3900,
+    firstPromoted = fakeNow - 3840,
+    lastSeen = fakeNow,
+    timing = {
+        averageInterval = 16,
+        medianInterval = 16,
+        robustCoefficientVariation = 0,
+        lowestRollingEntropy = 0,
+        intervalCount = 243,
+        cadenceClass = "Fixed Cadence",
+        cadenceSwitchCount = 0,
+        dominantBuckets = {
+            { bucket = 20, count = 238, percent = 98 },
+            { bucket = 50, count = 2, percent = 0.8 },
+            { bucket = 10, count = 1, percent = 0.4 },
+        },
+        cadencePhases = {
+            { bucket = 20, count = 91, duration = 1434, startTime = fakeNow - 3800, endTime = fakeNow - 2366 },
+            { bucket = 20, count = 22, duration = 347, startTime = fakeNow - 2200, endTime = fakeNow - 1853 },
+            { bucket = 20, count = 49, duration = 800, startTime = fakeNow - 1600, endTime = fakeNow - 800 },
+        },
+        windowSummaries = {
+            w600 = { postsPerHour = 234 },
+        },
+    },
+    content = {
+        templateReusePercent = 100,
+        shingleReusePercent = 100,
+        uniqueTemplateCount = 1,
+        nearDuplicateCount = 243,
+        adIntentTotal = 244,
+    },
+    behavior = {
+        postsPerHour = 225.3,
+    },
+    baseline = {
+        label = "Above 95th percentile",
+        sampleCount = 623,
+        postsPerHourPercentile = 94,
+        regularityPercentile = 100,
+        templateReusePercentile = 100,
+    },
+    network = {
+        peerCount = 0,
+        overlap = "None",
+    },
+    score = {
+        tier = "Critical",
+        localScore = 100,
+        displayScore = 100,
+        confidence = 89,
+        networkScore = 0,
+        evidenceFamilyCount = 5,
+        familyScores = {
+            timing = 35,
+            content = 30,
+            activity = 20,
+            persistence = 4,
+            baseline = 13,
+        },
+        reasons = {
+            "Timing matches a fixed posting cadence.",
+            "100% of local messages reuse the same text pattern.",
+        },
+    },
+}
+BBT.UI.SelectCandidate(timingDisplay)
+detailState = BBT.UI.GetDetailState()
+assertContains(detailState.assessment, "Critical suspicion", "critical detail summary should state tier")
+assertContains(detailState.assessment, "fixed ~20s cadence", "critical detail summary should cite cadence metric")
+assertContains(detailState.assessment, "peak active-window rate 234/hr", "critical detail summary should cite peak rate")
+assertNotContains(detailState.assessment, "% likely", "critical detail summary should not claim probability")
+assertContains(detailState.groups.timing.lines[6], "<1%", "common intervals should show tiny retained buckets as less than one percent")
+assertNotContains(detailState.groups.timing.lines[6], "0%", "common intervals should not show misleading zero percent")
+assertNotContains(detailState.groups.timing.lines[6], "~10s", "common intervals should hide one-off low-signal buckets")
+assertContains(detailState.groups.timing.lines[7], "across 3 runs", "stable runs should group repeated same-cadence phases")
+assertNotContains(detailState.groups.timing.lines[7], "x91", "stable runs should not show raw duplicate phase counts")
+assertContains(detailState.groups.timing.lines[9], "avg 225.3/hr; peak 234.0/hr", "rate line should show average and peak rates")
+BBT.UI.SelectCandidate(seller)
 
 BBT.UI.SetSort("character", false)
 local characterSorted = BBT.UI.SortCandidates({

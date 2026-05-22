@@ -410,6 +410,17 @@ local function getSourceMarker(candidate)
     return "Local"
 end
 
+local function getEvidenceSourceText(candidate)
+    local marker = getSourceMarker(candidate)
+    if marker == "L+N" then
+        return "Local + peer"
+    end
+    if marker == "Net" then
+        return "Peer only"
+    end
+    return "Local only"
+end
+
 local function formatLastSeen(candidate)
     if not candidate.lastSeen or candidate.lastSeen <= 0 then
         return "-"
@@ -425,29 +436,211 @@ local function formatFirstSeen(candidate)
     return Util.FormatTimestamp(candidate.firstSeen)
 end
 
+local function formatPercentForDisplay(value, count)
+    value = tonumber(value) or 0
+    if (count or 0) > 0 and value < 1 then
+        return "<1%"
+    end
+    return tostring(math.floor(value + 0.5)) .. "%"
+end
+
 local function topBucketsText(candidate)
-    local buckets = candidate.timing and candidate.timing.dominantBuckets or {}
+    local buckets = candidate and candidate.timing and candidate.timing.dominantBuckets or {}
     local parts = {}
-    for index = 1, math.min(3, #buckets) do
-        parts[#parts + 1] = string.format("~%ds %d%%", buckets[index].bucket or 0, buckets[index].percent or 0)
+    for _, bucket in ipairs(buckets) do
+        local count = bucket.count or 0
+        local percent = bucket.percent or 0
+        if percent >= 1 or count >= 2 then
+            parts[#parts + 1] = string.format(
+                "~%ds %s (%d)",
+                bucket.bucket or 0,
+                formatPercentForDisplay(percent, count),
+                count
+            )
+        end
+        if #parts >= 3 then
+            break
+        end
     end
     return #parts > 0 and table.concat(parts, ", ") or "-"
 end
 
 local function phasesText(candidate)
-    local phases = candidate.timing and candidate.timing.cadencePhases or {}
+    local phases = candidate and candidate.timing and candidate.timing.cadencePhases or {}
     if #phases == 0 then
         return "-"
     end
 
+    local groups = {}
+    local byBucket = {}
+    for index, phase in ipairs(phases) do
+        local bucket = phase.bucket or 0
+        local group = byBucket[bucket]
+        local duration = phase.duration or ((phase.endTime or 0) - (phase.startTime or 0))
+        if not group then
+            group = {
+                bucket = bucket,
+                firstIndex = index,
+                count = 0,
+                duration = 0,
+                longestDuration = 0,
+                runCount = 0,
+            }
+            byBucket[bucket] = group
+            groups[#groups + 1] = group
+        end
+        group.count = group.count + (phase.count or 0)
+        group.duration = group.duration + math.max(0, duration or 0)
+        group.longestDuration = math.max(group.longestDuration or 0, duration or 0)
+        group.runCount = group.runCount + 1
+    end
+
+    table.sort(groups, function(left, right)
+        return (left.firstIndex or 0) < (right.firstIndex or 0)
+    end)
+
     local parts = {}
-    for index = 1, math.min(3, #phases) do
-        local phase = phases[index]
-        local duration = (phase.endTime or 0) - (phase.startTime or 0)
-        parts[#parts + 1] =
-            string.format("~%ds x%d (%s)", phase.bucket or 0, phase.count or 0, Util.FormatDuration(duration))
+    for index = 1, math.min(2, #groups) do
+        local group = groups[index]
+        if (group.runCount or 0) > 1 then
+            parts[#parts + 1] = string.format(
+                "~%ds across %d runs; longest %s",
+                group.bucket or 0,
+                group.runCount or 0,
+                Util.FormatDuration(group.longestDuration or 0)
+            )
+        else
+            parts[#parts + 1] =
+                string.format("~%ds for %s", group.bucket or 0, Util.FormatDuration(group.duration or 0))
+        end
+    end
+    if #groups > 2 then
+        parts[#parts + 1] = "+" .. tostring(#groups - 2) .. " more"
     end
     return table.concat(parts, ", ")
+end
+
+local function getPeakPostsPerHour(candidate)
+    local behavior = candidate and candidate.behavior or {}
+    local timing = candidate and candidate.timing or {}
+    local rate = behavior.postsPerHour or 0
+    for _, summary in pairs(timing.windowSummaries or {}) do
+        rate = math.max(rate, summary.postsPerHour or 0)
+    end
+    return rate
+end
+
+local function rateText(candidate)
+    local average = candidate and candidate.behavior and candidate.behavior.postsPerHour or 0
+    local peak = getPeakPostsPerHour(candidate)
+    if peak >= average + 1 then
+        return string.format("avg %s/hr; peak %s/hr", Util.FormatNumber(average, 1), Util.FormatNumber(peak, 1))
+    end
+    return Util.FormatNumber(average, 1) .. "/hr"
+end
+
+local function joinSummaryPhrases(phrases)
+    if #phrases == 0 then
+        return "limited suspicious signals"
+    end
+    if #phrases == 1 then
+        return phrases[1]
+    end
+    if #phrases == 2 then
+        return phrases[1] .. " and " .. phrases[2]
+    end
+    return phrases[1] .. ", " .. phrases[2] .. ", and " .. phrases[3]
+end
+
+local function addSummaryPhrase(phrases, text)
+    if text and text ~= "" and #phrases < 3 then
+        phrases[#phrases + 1] = text
+    end
+end
+
+function UI.BuildEvidenceSummary(candidate)
+    if not candidate then
+        return "Select a row to view structured local and peer evidence."
+    end
+
+    local score = candidate.score or {}
+    local tier = score.tier or "Insufficient Data"
+    local timing = candidate.timing or {}
+    local content = candidate.content or {}
+    local baseline = candidate.baseline or {}
+    local network = candidate.network or {}
+    local peerCount = network.peerCount or 0
+
+    if tier == "Preliminary" or ((candidate.totalMessages or 0) == 0 and peerCount > 0) then
+        return "Preliminary peer signal: peer clients shared compact evidence, but this client has little or no local evidence. Suspicion, not proof."
+    end
+
+    if tier == "Insufficient Data" then
+        return "Not enough local evidence: observed chat has not formed a repeatable suspicious pattern. Suspicion, not proof."
+    end
+
+    local phrases = {}
+    local templateReuse = content.templateReusePercent or 0
+    local shingleReuse = content.shingleReusePercent or 0
+    if templateReuse >= 80 then
+        addSummaryPhrase(
+            phrases,
+            string.format("same text reused in %d%% of local messages", math.floor(templateReuse + 0.5))
+        )
+    elseif templateReuse >= 60 then
+        addSummaryPhrase(phrases, "repeated exact ad text")
+    elseif shingleReuse >= 75 then
+        addSummaryPhrase(
+            phrases,
+            string.format("similar wording clustered at %d%%", math.floor(shingleReuse + 0.5))
+        )
+    end
+
+    local cadence = UI.GetCadenceDisplay(candidate)
+    local topBucket = timing.dominantBuckets and timing.dominantBuckets[1]
+    local interval = topBucket and topBucket.bucket or timing.medianInterval or timing.averageInterval or 0
+    if cadence.label == "Fixed Cadence" and interval > 0 then
+        addSummaryPhrase(phrases, string.format("fixed ~%ds cadence", math.floor(interval + 0.5)))
+    elseif cadence.label == "Mixed Regular" then
+        addSummaryPhrase(phrases, "multiple stable posting cadences")
+    elseif cadence.label == "Jittered Cadence" then
+        addSummaryPhrase(phrases, "repeatable jittered cadence")
+    elseif cadence.label == "Burst-Only" then
+        addSummaryPhrase(phrases, "burst-heavy activity")
+    end
+
+    local peakRate = getPeakPostsPerHour(candidate)
+    if peakRate >= 30 then
+        addSummaryPhrase(phrases, string.format("peak active-window rate %s/hr", Util.FormatNumber(peakRate, 0)))
+    end
+
+    if (baseline.regularityPercentile or 0) >= 95 then
+        addSummaryPhrase(phrases, "timing above the 95th percentile locally")
+    elseif (baseline.postsPerHourPercentile or 0) >= 95 then
+        addSummaryPhrase(phrases, "rate above the 95th percentile locally")
+    elseif (baseline.templateReusePercentile or 0) >= 95 then
+        addSummaryPhrase(phrases, "text reuse above the 95th percentile locally")
+    end
+
+    local dayCount = Util.CountMap(candidate.daysSeen)
+    if dayCount >= 2 then
+        addSummaryPhrase(phrases, string.format("observed across %d days", dayCount))
+    end
+
+    if peerCount > 0 then
+        addSummaryPhrase(phrases, string.format("%d peer clients also shared evidence", peerCount))
+    end
+
+    local prefix = "Low suspicion"
+    if tier == "Critical" then
+        prefix = "Critical suspicion"
+    elseif tier == "High" then
+        prefix = "High suspicion"
+    elseif tier == "Medium" then
+        prefix = "Moderate suspicion"
+    end
+
+    return prefix .. ": " .. joinSummaryPhrases(phrases) .. ". Suspicion, not proof."
 end
 
 local function getIntervalCount(candidate)
@@ -489,12 +682,12 @@ function UI.GetCadenceDisplay(candidate)
 
     local tooltip = {}
     tooltip[#tooltip + 1] = string.format("Timing samples: %d", intervalCount)
-    tooltip[#tooltip + 1] = string.format("Rolling entropy: %.2f", rollingEntropy or 1)
+    tooltip[#tooltip + 1] = string.format("Timing entropy: %.2f", rollingEntropy or 1)
     tooltip[#tooltip + 1] = string.format("Global entropy: %.2f", globalEntropy or 1)
-    tooltip[#tooltip + 1] = string.format("Robust CV: %.2f", timing.robustCoefficientVariation or 1)
+    tooltip[#tooltip + 1] = string.format("Interval variation: %.2f", timing.robustCoefficientVariation or 1)
     tooltip[#tooltip + 1] = string.format("Median interval: %s", Util.FormatDuration(timing.medianInterval or 0))
-    tooltip[#tooltip + 1] = "Dominant buckets: " .. topBucketsText(candidate or {})
-    tooltip[#tooltip + 1] = string.format("Cadence switches: %d", cadenceSwitches)
+    tooltip[#tooltip + 1] = "Common intervals: " .. topBucketsText(candidate or {})
+    tooltip[#tooltip + 1] = string.format("Cadence changes: %d", cadenceSwitches)
 
     if label == "Sparse" then
         tooltip[#tooltip + 1] = "Not enough interval samples for a strong timing read."
@@ -1297,37 +1490,37 @@ local function refreshDetails(candidate)
 
     detail.title:SetText(candidate.displayName or "Candidate Detail")
     positionReportButton()
-    detail.subtitle:SetText("Evidence is based on monitored chat behavior. It is suspicion, not proof.")
+    detail.subtitle:SetText(UI.BuildEvidenceSummary(candidate))
 
     setGroupLine("summary", 1, "Tier", score.tier or "Insufficient Data")
-    setGroupLine("summary", 2, "Score", tostring(scoreValue(candidate)))
-    setGroupLine("summary", 3, "Confidence", Util.FormatPercent(score.confidence or 0))
+    setGroupLine("summary", 2, "Local Score", tostring(math.floor((score.localScore or 0) + 0.5)))
+    setGroupLine("summary", 3, "Evidence Strength", Util.FormatPercent(score.confidence or 0))
     setGroupLine("summary", 4, "Review", getTriageSummary(candidate))
-    setGroupLine("summary", 5, "Source", getSourceMarker(candidate))
+    setGroupLine("summary", 5, "Evidence Source", getEvidenceSourceText(candidate))
 
     setGroupLine("activity", 1, "First Seen", Util.FormatTimestamp(candidate.firstSeen))
-    setGroupLine("activity", 2, "First Suspected", Util.FormatTimestamp(candidate.firstPromoted))
+    setGroupLine("activity", 2, "First Flagged", Util.FormatTimestamp(candidate.firstPromoted))
     setGroupLine("activity", 3, "Last Seen", Util.FormatTimestamp(candidate.lastSeen))
-    setGroupLine("activity", 4, "Messages", tostring(candidate.totalMessages or 0))
+    setGroupLine("activity", 4, "Local Messages", tostring(candidate.totalMessages or 0))
     setGroupLine("activity", 5, "Channels", #channels > 0 and table.concat(channels, ", ") or "-")
 
     setGroupLine("timing", 1, "Cadence", cadence.label)
     setGroupLine("timing", 2, "Average Interval", Util.FormatDuration(timing.averageInterval or 0))
     setGroupLine("timing", 3, "Median Interval", Util.FormatDuration(timing.medianInterval or 0))
-    setGroupLine("timing", 4, "Robust CV", Util.FormatNumber(timing.robustCoefficientVariation or 1, 2))
-    setGroupLine("timing", 5, "Rolling Entropy", Util.FormatNumber(timing.lowestRollingEntropy or 1, 2))
-    setGroupLine("timing", 6, "Top Buckets", topBucketsText(candidate))
-    setGroupLine("timing", 7, "Cadence Phases", phasesText(candidate))
-    setGroupLine("timing", 8, "Switches", tostring(timing.cadenceSwitchCount or 0))
-    setGroupLine("timing", 9, "Posts/Hour", Util.FormatNumber(behavior.postsPerHour or 0, 1))
+    setGroupLine("timing", 4, "Interval Variation", Util.FormatNumber(timing.robustCoefficientVariation or 1, 2))
+    setGroupLine("timing", 5, "Timing Entropy", Util.FormatNumber(timing.lowestRollingEntropy or 1, 2))
+    setGroupLine("timing", 6, "Common Intervals", topBucketsText(candidate))
+    setGroupLine("timing", 7, "Stable Runs", phasesText(candidate))
+    setGroupLine("timing", 8, "Cadence Changes", tostring(timing.cadenceSwitchCount or 0))
+    setGroupLine("timing", 9, "Rate", rateText(candidate))
 
-    setGroupLine("content", 1, "Template Reuse", Util.FormatPercent(content.templateReusePercent or 0))
-    setGroupLine("content", 2, "Shingle Reuse", Util.FormatPercent(content.shingleReusePercent or 0))
-    setGroupLine("content", 3, "Unique Templates", tostring(content.uniqueTemplateCount or 0))
-    setGroupLine("content", 4, "Near Duplicates", tostring(content.nearDuplicateCount or 0))
-    setGroupLine("content", 5, "Ad Intent", tostring(content.adIntentTotal or 0) .. " categorized")
+    setGroupLine("content", 1, "Exact Text Reuse", Util.FormatPercent(content.templateReusePercent or 0))
+    setGroupLine("content", 2, "Similar Wording", Util.FormatPercent(content.shingleReusePercent or 0))
+    setGroupLine("content", 3, "Unique Text Patterns", tostring(content.uniqueTemplateCount or 0))
+    setGroupLine("content", 4, "Near-Duplicate Messages", tostring(content.nearDuplicateCount or 0))
+    setGroupLine("content", 5, "Ad-like Messages", tostring(content.adIntentTotal or 0))
 
-    setGroupLine("families", 1, "Families", tostring(score.evidenceFamilyCount or 0))
+    setGroupLine("families", 1, "Evidence Groups", tostring(score.evidenceFamilyCount or 0))
     setGroupLine("families", 2, "Timing", tostring(familyScores.timing or 0) .. " / 35")
     setGroupLine("families", 3, "Content", tostring(familyScores.content or 0) .. " / 30")
     setGroupLine("families", 4, "Activity", tostring(familyScores.activity or 0) .. " / 20")
@@ -1335,9 +1528,10 @@ local function refreshDetails(candidate)
     setGroupLine("families", 6, "Baseline", tostring(familyScores.baseline or 0) .. " / 15")
 
     setGroupLine("baseline", 1, "Status", baseline.label or "Collecting baseline")
-    setGroupLine("baseline", 2, "Samples", tostring(baseline.sampleCount or 0))
-    setGroupLine("baseline", 3, "Rate Percentile", Util.FormatPercent(baseline.postsPerHourPercentile or 0))
-    setGroupLine("baseline", 4, "Regularity Percentile", Util.FormatPercent(baseline.regularityPercentile or 0))
+    setGroupLine("baseline", 2, "Baseline Samples", tostring(baseline.sampleCount or 0))
+    setGroupLine("baseline", 3, "Rate vs Baseline", Util.FormatPercent(baseline.postsPerHourPercentile or 0))
+    setGroupLine("baseline", 4, "Regularity vs Baseline", Util.FormatPercent(baseline.regularityPercentile or 0))
+    setGroupLine("baseline", 5, "Reuse vs Baseline", Util.FormatPercent(baseline.templateReusePercentile or 0))
 
     setGroupLine("network", 1, "Peers", tostring(network.peerCount or 0))
     setGroupLine("network", 2, "Overlap", network.overlap or "None")
@@ -1345,7 +1539,7 @@ local function refreshDetails(candidate)
     setGroupLine(
         "network",
         4,
-        "Local / Network",
+        "Local Score / Peer Signal",
         string.format("%d / %d", score.localScore or 0, score.networkScore or 0)
     )
 
@@ -1423,6 +1617,46 @@ function UI.GetReportAssistState()
             and reportAssistFrame.clearReportedButton
             and reportAssistFrame.clearReportedButton.enabled == true
             or false,
+    }
+end
+
+local function widgetText(widget)
+    if not widget then
+        return ""
+    end
+    if widget.GetText then
+        local ok, value = pcall(widget.GetText, widget)
+        if ok then
+            return value or ""
+        end
+    end
+    return widget.text or ""
+end
+
+function UI.GetDetailState()
+    local groups = {}
+    for name, group in pairs(detail.groups or {}) do
+        local lines = {}
+        for index, line in ipairs(group.lines or {}) do
+            lines[index] = widgetText(line)
+        end
+        groups[name] = {
+            header = widgetText(group.header),
+            lines = lines,
+        }
+    end
+
+    local reasons = {}
+    for index, line in ipairs(detail.reasons or {}) do
+        reasons[index] = widgetText(line)
+    end
+
+    return {
+        title = widgetText(detail.title),
+        assessment = widgetText(detail.subtitle),
+        groups = groups,
+        reasonHeader = widgetText(detail.reasonHeader),
+        reasons = reasons,
     }
 end
 
@@ -1873,7 +2107,7 @@ local function createDetails(parent)
     detail.subtitle = createFont(
         parent,
         "OVERLAY",
-        "GameFontDisableSmall",
+        "GameFontHighlightSmall",
         "TOPLEFT",
         parent,
         "TOPLEFT",
@@ -1886,16 +2120,16 @@ local function createDetails(parent)
     detail.groups = {
         summary = createSection(parent, "Summary", OUTER_MARGIN, DETAIL_TOP, 250, 5),
         activity = createSection(parent, "Activity", OUTER_MARGIN, DETAIL_TOP - 102, 340, 5),
-        network = createSection(parent, "Network Context", OUTER_MARGIN, DETAIL_TOP - 220, 340, 4),
+        network = createSection(parent, "Peer Evidence", OUTER_MARGIN, DETAIL_TOP - 220, 340, 4),
         timing = createSection(parent, "Timing", 380, DETAIL_TOP, 350, 9),
         content = createSection(parent, "Content", 380, DETAIL_TOP - 176, 330, 5),
-        families = createSection(parent, "Evidence Families", 760, DETAIL_TOP, 360, 6),
-        baseline = createSection(parent, "Compared to Current Channel", 760, DETAIL_TOP - 146, 360, 4),
+        families = createSection(parent, "Local Score Breakdown", 760, DETAIL_TOP, 360, 6),
+        baseline = createSection(parent, "Local Channel Baseline", 760, DETAIL_TOP - 146, 360, 5),
     }
 
     local reasonHeader =
         createFont(parent, "OVERLAY", "GameFontNormalSmall", "TOPLEFT", parent, "TOPLEFT", 760, REASONS_TOP)
-    reasonHeader:SetText("Top Evidence Reasons")
+    reasonHeader:SetText("Main Signals")
     detail.reasonHeader = reasonHeader
 
     local divider = parent:CreateTexture(nil, "ARTWORK")
@@ -1905,7 +2139,7 @@ local function createDetails(parent)
     detail.reasonDivider = divider
 
     detail.reasons = {}
-    for index = 1, 3 do
+    for index = 1, 4 do
         local line = createFont(
             parent,
             "OVERLAY",
