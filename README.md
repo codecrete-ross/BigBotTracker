@@ -59,6 +59,8 @@ The addon does not persist or sync raw chat text. Saved and synced data is compa
 
 Sync does not join or create custom chat channels. When enabled, it uses hidden WoW addon-message transports for guild and group members who also run Big Bot Tracker. If no guild or group transport is available, sync waits without changing the user's chat channels.
 
+Sync starts local-only. On first run, a notice lets you enable hidden guild/group sharing or keep the addon local; `/bbt sync on` and `/bbt sync off` can change that later.
+
 ## Commands
 
 - `/bbt`, `/bbt open`, `/bbt show`, or `/bigbottracker` opens the report

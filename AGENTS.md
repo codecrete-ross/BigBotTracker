@@ -4,25 +4,27 @@ This is the canonical shared governance file for repository-level agent guidance
 
 ## What This Is
 
-Big Bot Tracker is a World of Warcraft Retail addon that monitors Trade and Services chat and surfaces chat-based bot-likelihood reports. It tracks suspicious advertising patterns, not confirmed botting.
+Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors Trade and Services chat and surfaces chat-based bot-likelihood reports. It tracks suspicious advertising patterns, not confirmed botting.
 
 ## Project Structure
 
 - `BigBotTracker.toc` - addon metadata and load order
 - `Util.lua` - shared helpers
+- `Compat.lua` - client flavor detection and UI compatibility helpers
 - `Normalizer.lua` - message normalization, hashing, similarity
 - `Scoring.lua` - interval entropy, cadence detection, score calculation
 - `Storage.lua` - SavedVariables schema and candidate persistence
 - `ChatScanner.lua` - `CHAT_MSG_CHANNEL` intake and promotion thresholds
 - `Sync.lua` - addon-message evidence capsule sync
+- `Report.lua` - report assist text and Blizzard report-flow helpers
 - `UI.lua` - report window and controls
 - `Core.lua` - events, slash commands, startup
-- `scripts/deploy.ps1` - local copy deploy to Retail AddOns folder
+- `scripts/deploy.ps1` - local copy deploy to the configured WoW AddOns folder
 - `.pkgmeta` - CurseForge packager config
 
 ## Core Rules
 
-- Retail only.
+- Retail and Classic clients only; do not target private servers or unsupported addon environments.
 - Do not auto-report players.
 - Do not post public accusations.
 - Use suspicion/evidence language, not confirmed-bot language.
@@ -62,5 +64,5 @@ Development order:
 1. Edit source files in this repo.
 2. Deploy locally with:
    `powershell -ExecutionPolicy Bypass -File .\scripts\deploy.ps1`
-3. Test in-game with `/reload` and `/bbt`.
+3. Test in-game with `/reload` and `/bbt` in the target supported client.
 4. Wait for user confirmation before committing, tagging, pushing, or releasing.
