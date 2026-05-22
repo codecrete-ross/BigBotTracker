@@ -1,5 +1,9 @@
 # Big Bot Tracker
 
+<p align="center">
+  <img src="logo.png" alt="Big Bot Tracker logo" width="320" />
+</p>
+
 Big Bot Tracker is a World of Warcraft Retail addon that monitors Trade and Services chat for suspicious repeated advertising patterns.
 
 It does **not** prove that someone is botting. It does not auto-report players, post accusations, block chat, or send public messages. It shows evidence so you can review the pattern yourself.

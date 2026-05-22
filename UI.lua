@@ -11,6 +11,7 @@ local Report = BBT.Report
 
 local FRAME_NAME = "BigBotTrackerFrame"
 local REPORT_ASSIST_FRAME_NAME = "BigBotTrackerReportAssistFrame"
+local ADDON_ICON_TEXTURE = "Interface\\AddOns\\BigBotTracker\\logo"
 local FRAME_WIDTH = 1180
 local FRAME_HEIGHT = 900
 local REPORT_ASSIST_WIDTH = 520
@@ -18,6 +19,11 @@ local REPORT_ASSIST_HEIGHT = 420
 local OUTER_MARGIN = 20
 local TABLE_CONTENT_WIDTH = 1120
 local TABLE_VIEW_WIDTH = 1120
+local WINDOW_ICON_SIZE = 66
+local HEADER_ICON_GAP = 24
+local HEADER_CONTENT_WIDTH = TABLE_VIEW_WIDTH - WINDOW_ICON_SIZE - HEADER_ICON_GAP
+local HEADER_ICON_RIGHT = OUTER_MARGIN + TABLE_VIEW_WIDTH - FRAME_WIDTH
+local HEADER_ICON_TOP = -40
 local TABLE_HEIGHT = 270
 local ROW_HEIGHT = 22
 local HEADER_HEIGHT = 24
@@ -1535,7 +1541,7 @@ end
 local function createStatusStrip(parent)
     local statusFrame = CreateFrame("Frame", nil, parent)
     statusFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", OUTER_MARGIN, STATUS_TOP)
-    statusFrame:SetSize(TABLE_VIEW_WIDTH, 24)
+    statusFrame:SetSize(HEADER_CONTENT_WIDTH, 24)
     statusFrame:EnableMouse(true)
     parent.statusFrame = statusFrame
 
@@ -1555,7 +1561,7 @@ local function createStatusStrip(parent)
     parent.trackedStatusText = tracked
 
     local sync = createFont(statusFrame, "OVERLAY", "GameFontHighlightSmall", "LEFT", statusFrame, "LEFT", 308, 0)
-    sync:SetWidth(420)
+    sync:SetWidth(330)
     sync:SetText("Sync: Off")
     parent.syncStatusText = sync
 
@@ -1756,9 +1762,17 @@ function UI.Create()
 
     frame.subtitle =
         createFont(frame, "OVERLAY", "GameFontDisableSmall", "TOPLEFT", frame, "TOPLEFT", OUTER_MARGIN, SUBTITLE_TOP)
-    frame.subtitle:SetWidth(500)
+    frame.subtitle:SetWidth(HEADER_CONTENT_WIDTH)
     frame.subtitle:SetText("Chat-based suspicion report for Trade and Services.")
 
+
+    frame.iconArea = CreateFrame("Frame", nil, frame)
+    frame.iconArea:SetSize(WINDOW_ICON_SIZE, WINDOW_ICON_SIZE)
+    frame.iconArea:SetPoint("TOPRIGHT", frame, "TOPRIGHT", HEADER_ICON_RIGHT, HEADER_ICON_TOP)
+
+    frame.icon = frame.iconArea:CreateTexture(nil, "OVERLAY")
+    frame.icon:SetAllPoints(frame.iconArea)
+    frame.icon:SetTexture(ADDON_ICON_TEXTURE)
     createStatusStrip(frame)
     createTable(frame)
     createDetails(frame)
