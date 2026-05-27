@@ -1,6 +1,6 @@
 ## Interface: 120005, 50503, 40402, 38001, 30405, 20505, 11508
 ## Title: Big Bot Tracker
-## Notes: Monitors Trade and Services chat for suspicious ad patterns with evidence reports.
+## Notes: Monitors joined public chat channels for repeated ad patterns with evidence reports.
 ## Author: Codecrete
 ## Version: @project-version@
 ## Category-enUS: Chat

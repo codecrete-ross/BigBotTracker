@@ -4,20 +4,26 @@ Use these cases for manual or Lua-harness testing.
 
 ## Casual Human
 
-- One or two Trade/Services messages in a session
+- One or two joined public channel messages in a session
 - Expected: remains session-only, not persisted
 
 ## Macro Advertiser
 
 - Three similar messages within 30 minutes
 - Intervals vary substantially
-- Expected: promoted, low/medium score depending on template reuse
+- Expected: promoted as `Observing` or `Early Pattern` depending on template reuse
 
 ## Fixed Cadence
 
 - Ten messages with intervals near 120 seconds
 - Same or near-same template
-- Expected: high score, low rolling entropy, dominant `~120s` bucket
+- Expected: low rolling entropy and dominant `~120s` bucket, but not above `Early Pattern` until enough local evidence accumulates
+
+## Dominant Active-Run Cadence With Gaps
+
+- Multiple active runs at the same interval, with occasional long gaps or outlier intervals
+- Same or near-same template
+- Expected: promoted as strong timing evidence, but cadence label is `Dominant Active-Run Cadence`, not `Fixed Cadence`
 
 ## Schedule Switch
 
@@ -34,4 +40,4 @@ Use these cases for manual or Lua-harness testing.
 ## Peer Poisoning Guard
 
 - One peer sends evidence for a candidate with no local observations
-- Expected: network-only candidate can appear, but one peer cannot dominate score alone
+- Expected: network-only candidate can appear as `Peer Context Only`, but peer context cannot raise local status, pattern strength, or local evidence

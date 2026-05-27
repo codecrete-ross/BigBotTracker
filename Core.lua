@@ -52,7 +52,10 @@ local function handleSlashCommand(message)
     end
 
     local monitorName, monitorState = message:match("^monitor%s+(%S+)%s+(%S+)$")
-    if (monitorName == "trade" or monitorName == "services") and (monitorState == "on" or monitorState == "off") then
+    if
+        (monitorName == "public" or monitorName == "trade" or monitorName == "services")
+        and (monitorState == "on" or monitorState == "off")
+    then
         BBT.Storage.GetSettings().monitor[monitorName] = monitorState == "on"
         BBT.Util.Print(
             string.format("%s monitoring %s.", monitorName, monitorState == "on" and "enabled" or "disabled")
@@ -73,7 +76,7 @@ local function handleSlashCommand(message)
     end
 
     BBT.Util.Print(
-        "Commands: /bbt, /bbt status, /bbt sync on|off, /bbt monitor trade|services on|off, /bbt export, /bbt clear buffers, /bbt debug on|off"
+        "Commands: /bbt, /bbt status, /bbt sync on|off, /bbt monitor public|trade|services on|off, /bbt export, /bbt clear buffers, /bbt debug on|off"
     )
 end
 

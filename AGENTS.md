@@ -4,7 +4,7 @@ This is the canonical shared governance file for repository-level agent guidance
 
 ## What This Is
 
-Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors Trade and Services chat and surfaces chat-based bot-likelihood reports. It tracks suspicious advertising patterns, not confirmed botting.
+Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors joined public chat channels and surfaces player-facing evidence for repeated advertising patterns. It tracks observed chat patterns, not confirmed botting.
 
 ## Project Structure
 
@@ -19,6 +19,10 @@ Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors Tr
 - `Report.lua` - report assist text and Blizzard report-flow helpers
 - `UI.lua` - report window and controls
 - `Core.lua` - events, slash commands, startup
+- `docs/DETECTION_MODEL.md` - canonical v1 detection model and status semantics
+- `docs/DETECTION_STRATEGY.md` - detection strategy, research basis, and calibration posture
+- `docs/PLAYER_METRICS.md` - player-facing labels, tooltips, summaries, and report-assist wording
+- `docs/DATA_EPOCHS.md` - evidence reset policy and data epoch rules
 - `scripts/deploy.ps1` - local copy deploy to the configured WoW AddOns folder
 - `.pkgmeta` - CurseForge packager config
 
@@ -38,7 +42,7 @@ Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors Tr
 
 V1 is non-ML and explainable. It uses capped local evidence families: timing regularity, content similarity, activity/burst behavior, persistence, and current-channel baseline outlier comparison.
 
-High and Critical tiers require multiple local evidence families. Network evidence must not boost local score or local confidence because peer clients may observe the same public messages.
+Strong player-facing statuses require multiple local evidence families. Network evidence must not boost local status, pattern strength, or local evidence because peer clients may observe the same public messages.
 
 Feature storage must remain compact. Do not persist raw chat text. Store bounded interval samples, template hashes, shingle hashes, category counters, coarse observation windows, aggregate baseline bins, and score snapshots.
 

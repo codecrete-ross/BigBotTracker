@@ -52,6 +52,9 @@ local tableContent
 local emptyState
 local headerButtons = {}
 local filterButtons = {}
+local channelDropdownButton
+local channelDropdownMenu
+local channelDropdownButtons = {}
 local rows = {}
 local detail = {}
 local reportAssistFrame
@@ -68,13 +71,13 @@ local DIRTY_REFRESH_SECONDS = 0.5
 local PASSIVE_REFRESH_SECONDS = 5
 local STATUS_REFRESH_SECONDS = 1
 
-local tierRank = {
-    ["Insufficient Data"] = 0,
-    Preliminary = 0,
-    Low = 1,
-    Medium = 2,
-    High = 3,
-    Critical = 4,
+local statusRank = {
+    Observing = 0,
+    ["Peer Context Only"] = 0,
+    ["Early Pattern"] = 1,
+    ["Repeated Pattern"] = 2,
+    ["Strong Pattern"] = 3,
+    ["Very Strong Pattern"] = 4,
 }
 
 local sourceRank = {
@@ -101,97 +104,65 @@ local columns = {
         tooltip = "Eye button for keeping a candidate visible in the clean Active view.",
     },
     {
+        key = "status",
+        label = "Status",
+        width = 150,
+        align = "LEFT",
+        defaultDescending = true,
+        tooltip = "Plain-language evidence status derived from local observed patterns.",
+    },
+    {
         key = "character",
         label = "Character-Realm",
-        width = 158,
+        width = 160,
         align = "LEFT",
         defaultDescending = false,
         tooltip = "Tracked character and realm. Same names on different realms are kept separate.",
     },
     {
-        key = "tier",
-        label = "Tier",
-        width = 110,
+        key = "signals",
+        label = "Observed Signals",
+        width = 280,
         align = "LEFT",
         defaultDescending = true,
-        tooltip = "Plain-language suspicion tier derived from score and confidence.",
-    },
-    {
-        key = "score",
-        label = "Score",
-        width = 58,
-        align = "RIGHT",
-        defaultDescending = true,
-        tooltip = "Local evidence likelihood score. Network evidence is shown separately and does not boost this score.",
-    },
-    {
-        key = "confidence",
-        label = "Conf",
-        width = 58,
-        align = "RIGHT",
-        defaultDescending = true,
-        tooltip = "How much evidence supports the current score.",
-    },
-    {
-        key = "firstSeen",
-        label = "First Seen",
-        width = 128,
-        align = "LEFT",
-        defaultDescending = false,
-        tooltip = "First time this character was observed by this addon.",
-    },
-    {
-        key = "lastSeen",
-        label = "Last Seen",
-        width = 106,
-        align = "LEFT",
-        defaultDescending = true,
-        tooltip = "Most recent monitored-channel message or network sighting.",
+        tooltip = "Short summary of the local patterns that caused the candidate to appear.",
     },
     {
         key = "messages",
         label = "Msgs",
-        width = 50,
+        width = 48,
         align = "RIGHT",
         defaultDescending = true,
         tooltip = "Total locally observed messages for this candidate.",
     },
     {
-        key = "rate",
-        label = "Rate",
-        width = 58,
-        align = "RIGHT",
-        defaultDescending = true,
-        tooltip = "Estimated posts per hour across the observed active span.",
-    },
-    {
-        key = "averageInterval",
-        label = "Avg Int",
-        width = 70,
-        align = "RIGHT",
-        defaultDescending = false,
-        tooltip = "Average interval between observed messages.",
-    },
-    {
         key = "cadence",
         label = "Cadence",
-        width = 122,
+        width = 178,
         align = "LEFT",
         defaultDescending = true,
-        tooltip = "User-friendly timing entropy summary. Hover rows for entropy and bucket details.",
+        tooltip = "Player-friendly timing pattern. Hover rows for interval details.",
     },
     {
         key = "reuse",
-        label = "Reuse",
-        width = 58,
+        label = "Text Reuse",
+        width = 70,
         align = "RIGHT",
         defaultDescending = true,
         tooltip = "Percent of messages matching the most reused normalized template.",
     },
     {
+        key = "lastSeen",
+        label = "Last Seen",
+        width = 110,
+        align = "LEFT",
+        defaultDescending = true,
+        tooltip = "Most recent monitored-channel message or network sighting.",
+    },
+    {
         key = "source",
         label = "Src",
-        width = 60,
+        width = 52,
         align = "LEFT",
         defaultDescending = true,
         tooltip = "Local, network, or combined evidence source.",
@@ -203,20 +174,21 @@ for index, column in ipairs(columns) do
     columnIndexByKey[column.key] = index
 end
 
-local tierColors = {
-    Critical = { 1.00, 0.22, 0.16 },
-    High = { 1.00, 0.52, 0.12 },
-    Medium = { 1.00, 0.84, 0.16 },
-    Low = { 0.56, 0.78, 1.00 },
-    Preliminary = { 0.66, 0.78, 1.00 },
-    ["Insufficient Data"] = { 0.66, 0.66, 0.66 },
+local statusColors = {
+    ["Very Strong Pattern"] = { 1.00, 0.28, 0.18 },
+    ["Strong Pattern"] = { 1.00, 0.58, 0.16 },
+    ["Repeated Pattern"] = { 1.00, 0.84, 0.16 },
+    ["Early Pattern"] = { 0.56, 0.78, 1.00 },
+    ["Peer Context Only"] = { 0.66, 0.78, 1.00 },
+    Observing = { 0.66, 0.66, 0.66 },
 }
 
 local cadenceColors = {
     ["Fixed Cadence"] = { 1.00, 0.34, 0.22 },
+    ["Dominant Active-Run Cadence"] = { 1.00, 0.44, 0.20 },
     ["Jittered Cadence"] = { 1.00, 0.56, 0.22 },
-    ["Mixed Regular"] = { 1.00, 0.64, 0.20 },
-    ["Burst-Only"] = { 1.00, 0.76, 0.28 },
+    ["Mixed Cadence"] = { 1.00, 0.64, 0.20 },
+    ["Burst Pattern"] = { 1.00, 0.76, 0.28 },
     Variable = { 0.70, 0.82, 1.00 },
     Sparse = { 0.60, 0.60, 0.60 },
 }
@@ -224,10 +196,11 @@ local cadenceColors = {
 local cadenceRank = {
     Sparse = 0,
     Variable = 1,
-    ["Burst-Only"] = 2,
+    ["Burst Pattern"] = 2,
     ["Jittered Cadence"] = 3,
-    ["Mixed Regular"] = 4,
-    ["Fixed Cadence"] = 5,
+    ["Dominant Active-Run Cadence"] = 4,
+    ["Mixed Cadence"] = 5,
+    ["Fixed Cadence"] = 6,
 }
 
 local function createFont(parent, layer, template, point, relativeTo, relativePoint, x, y)
@@ -329,14 +302,17 @@ local isSortableColumnKey
 local function getSettingsUi()
     local settings = Storage.GetSettings()
     settings.ui = settings.ui or {}
-    settings.ui.sortKey = settings.ui.sortKey or "score"
+    settings.ui.sortKey = settings.ui.sortKey or "status"
     if not isSortableColumnKey(settings.ui.sortKey) then
-        settings.ui.sortKey = "score"
+        settings.ui.sortKey = "status"
     end
     if settings.ui.sortDescending == nil then
         settings.ui.sortDescending = true
     end
     settings.ui.filterKey = settings.ui.filterKey or "active"
+    if settings.ui.channelFilter ~= nil and Util.Trim(settings.ui.channelFilter) == "" then
+        settings.ui.channelFilter = nil
+    end
     return settings.ui
 end
 
@@ -405,6 +381,66 @@ local function candidateMatchesFilter(candidate, filterKey)
     return isCandidateWatched(candidate) or not isCandidateHandled(candidate)
 end
 
+local function truncateChannelName(channelName, maxLength)
+    channelName = tostring(channelName or "")
+    maxLength = maxLength or 28
+    if #channelName <= maxLength then
+        return channelName
+    end
+    return channelName:sub(1, math.max(1, maxLength - 3)) .. "..."
+end
+
+local function candidateMatchesChannel(candidate, channelFilter)
+    if not channelFilter or channelFilter == "" then
+        return true
+    end
+
+    local channels = candidate and candidate.channels or nil
+    return type(channels) == "table" and (channels[channelFilter] or 0) > 0
+end
+
+function UI.GetChannelFilterOptions(candidates)
+    local seen = {}
+    for _, candidate in ipairs(candidates or {}) do
+        for channelName, count in pairs(candidate.channels or {}) do
+            if type(channelName) == "string" and channelName ~= "" and (tonumber(count) or 0) > 0 then
+                seen[channelName] = true
+            end
+        end
+    end
+    return Util.TableKeysSorted(seen)
+end
+
+local function channelOptionExists(channelName, options)
+    if not channelName or channelName == "" then
+        return true
+    end
+    for _, option in ipairs(options or {}) do
+        if option == channelName then
+            return true
+        end
+    end
+    return false
+end
+
+local function validateChannelFilter(uiSettings, candidates)
+    local channelFilter = uiSettings and uiSettings.channelFilter or nil
+    if not channelFilter or channelFilter == "" then
+        if uiSettings then
+            uiSettings.channelFilter = nil
+        end
+        return nil, UI.GetChannelFilterOptions(candidates)
+    end
+
+    local options = UI.GetChannelFilterOptions(candidates)
+    if not channelOptionExists(channelFilter, options) then
+        uiSettings.channelFilter = nil
+        return nil, options
+    end
+
+    return channelFilter, options
+end
+
 local function getSourceMarker(candidate)
     local hasLocal = (candidate.totalMessages or 0) > 0
     local peerCount = candidate.network and candidate.network.peerCount or 0
@@ -458,12 +494,8 @@ local function topBucketsText(candidate)
         local count = bucket.count or 0
         local percent = bucket.percent or 0
         if percent >= 1 or count >= 2 then
-            parts[#parts + 1] = string.format(
-                "~%ds %s (%d)",
-                bucket.bucket or 0,
-                formatPercentForDisplay(percent, count),
-                count
-            )
+            parts[#parts + 1] =
+                string.format("~%ds %s (%d)", bucket.bucket or 0, formatPercentForDisplay(percent, count), count)
         end
         if #parts >= 3 then
             break
@@ -548,7 +580,7 @@ end
 
 local function joinSummaryPhrases(phrases)
     if #phrases == 0 then
-        return "limited suspicious signals"
+        return "limited local signals"
     end
     if #phrases == 1 then
         return phrases[1]
@@ -565,42 +597,64 @@ local function addSummaryPhrase(phrases, text)
     end
 end
 
-function UI.BuildEvidenceSummary(candidate)
-    if not candidate then
-        return "Select a row to view structured local and peer evidence."
+local function getStatus(candidate)
+    local score = candidate and candidate.score or {}
+    local status = score.status or score.tier or "Observing"
+    if status == "Critical" then
+        return "Very Strong Pattern"
+    elseif status == "High" then
+        return "Strong Pattern"
+    elseif status == "Medium" then
+        return "Repeated Pattern"
+    elseif status == "Low" then
+        return "Early Pattern"
+    elseif status == "Preliminary" then
+        return "Peer Context Only"
+    elseif status == "Insufficient Data" then
+        return "Observing"
+    end
+    return status
+end
+
+local function getStatusReason(candidate)
+    local score = candidate and candidate.score or {}
+    local reasons = score.statusCapReasons
+        or (candidate and candidate.features and candidate.features.statusCapReasons)
+        or {}
+    if type(reasons) == "table" and #reasons > 0 then
+        return table.concat(reasons, "; ")
     end
 
-    local score = candidate.score or {}
-    local tier = score.tier or "Insufficient Data"
-    local timing = candidate.timing or {}
-    local content = candidate.content or {}
-    local baseline = candidate.baseline or {}
-    local network = candidate.network or {}
-    local peerCount = network.peerCount or 0
-
-    if tier == "Preliminary" or ((candidate.totalMessages or 0) == 0 and peerCount > 0) then
-        return "Preliminary peer signal: peer clients shared compact evidence, but this client has little or no local evidence. Suspicion, not proof."
+    local status = getStatus(candidate)
+    if status == "Very Strong Pattern" then
+        return "multiple local signal types agree"
+    elseif status == "Strong Pattern" then
+        return "multiple local signal types agree"
+    elseif status == "Repeated Pattern" then
+        return "a repeated local pattern is clear enough to review"
+    elseif status == "Early Pattern" then
+        return "evidence is still limited"
+    elseif status == "Peer Context Only" then
+        return "this client has no local evidence"
     end
+    return "not enough local evidence yet"
+end
 
-    if tier == "Insufficient Data" then
-        return "Not enough local evidence: observed chat has not formed a repeatable suspicious pattern. Suspicion, not proof."
-    end
-
+local function collectSignalPhrases(candidate, includePeer)
     local phrases = {}
+    local timing = candidate and candidate.timing or {}
+    local content = candidate and candidate.content or {}
+    local baseline = candidate and candidate.baseline or {}
+    local network = candidate and candidate.network or {}
+
     local templateReuse = content.templateReusePercent or 0
     local shingleReuse = content.shingleReusePercent or 0
     if templateReuse >= 80 then
-        addSummaryPhrase(
-            phrases,
-            string.format("same text reused in %d%% of local messages", math.floor(templateReuse + 0.5))
-        )
+        addSummaryPhrase(phrases, string.format("%d%% same text", math.floor(templateReuse + 0.5)))
     elseif templateReuse >= 60 then
-        addSummaryPhrase(phrases, "repeated exact ad text")
+        addSummaryPhrase(phrases, "repeated text")
     elseif shingleReuse >= 75 then
-        addSummaryPhrase(
-            phrases,
-            string.format("similar wording clustered at %d%%", math.floor(shingleReuse + 0.5))
-        )
+        addSummaryPhrase(phrases, string.format("%d%% similar wording", math.floor(shingleReuse + 0.5)))
     end
 
     local cadence = UI.GetCadenceDisplay(candidate)
@@ -608,46 +662,92 @@ function UI.BuildEvidenceSummary(candidate)
     local interval = topBucket and topBucket.bucket or timing.medianInterval or timing.averageInterval or 0
     if cadence.label == "Fixed Cadence" and interval > 0 then
         addSummaryPhrase(phrases, string.format("fixed ~%ds cadence", math.floor(interval + 0.5)))
-    elseif cadence.label == "Mixed Regular" then
-        addSummaryPhrase(phrases, "multiple stable posting cadences")
+    elseif cadence.label == "Dominant Active-Run Cadence" and interval > 0 then
+        addSummaryPhrase(phrases, string.format("dominant ~%ds active-run cadence", math.floor(interval + 0.5)))
+    elseif cadence.label == "Mixed Cadence" then
+        addSummaryPhrase(phrases, "mixed stable cadences")
     elseif cadence.label == "Jittered Cadence" then
-        addSummaryPhrase(phrases, "repeatable jittered cadence")
-    elseif cadence.label == "Burst-Only" then
+        addSummaryPhrase(phrases, "jittered repeat cadence")
+    elseif cadence.label == "Burst Pattern" then
         addSummaryPhrase(phrases, "burst-heavy activity")
     end
 
     local peakRate = getPeakPostsPerHour(candidate)
     if peakRate >= 30 then
-        addSummaryPhrase(phrases, string.format("peak active-window rate %s/hr", Util.FormatNumber(peakRate, 0)))
+        addSummaryPhrase(phrases, string.format("peak %s/hr", Util.FormatNumber(peakRate, 0)))
     end
 
-    if (baseline.regularityPercentile or 0) >= 95 then
-        addSummaryPhrase(phrases, "timing above the 95th percentile locally")
-    elseif (baseline.postsPerHourPercentile or 0) >= 95 then
-        addSummaryPhrase(phrases, "rate above the 95th percentile locally")
-    elseif (baseline.templateReusePercentile or 0) >= 95 then
-        addSummaryPhrase(phrases, "text reuse above the 95th percentile locally")
+    if (baseline.sampleCount or 0) >= 50 then
+        if (baseline.regularityPercentile or 0) >= 95 then
+            addSummaryPhrase(phrases, "timing above local baseline")
+        elseif (baseline.postsPerHourPercentile or 0) >= 95 then
+            addSummaryPhrase(phrases, "rate above local baseline")
+        elseif (baseline.templateReusePercentile or 0) >= 95 then
+            addSummaryPhrase(phrases, "reuse above local baseline")
+        end
     end
 
-    local dayCount = Util.CountMap(candidate.daysSeen)
+    local dayCount = Util.CountMap(candidate and candidate.daysSeen)
     if dayCount >= 2 then
-        addSummaryPhrase(phrases, string.format("observed across %d days", dayCount))
+        addSummaryPhrase(phrases, string.format("%d days observed", dayCount))
     end
 
-    if peerCount > 0 then
-        addSummaryPhrase(phrases, string.format("%d peer clients also shared evidence", peerCount))
+    if includePeer and (network.peerCount or 0) > 0 then
+        addSummaryPhrase(phrases, string.format("%d peer clients", network.peerCount or 0))
     end
 
-    local prefix = "Low suspicion"
-    if tier == "Critical" then
-        prefix = "Critical suspicion"
-    elseif tier == "High" then
-        prefix = "High suspicion"
-    elseif tier == "Medium" then
-        prefix = "Moderate suspicion"
+    return phrases
+end
+
+function UI.BuildObservedSignals(candidate)
+    if not candidate then
+        return "-"
+    end
+    local phrases = collectSignalPhrases(candidate, false)
+    if
+        #phrases == 0
+        and (candidate.totalMessages or 0) == 0
+        and candidate.network
+        and (candidate.network.peerCount or 0) > 0
+    then
+        return "peer context only"
+    end
+    if #phrases == 0 then
+        return "collecting local evidence"
+    end
+    return table.concat(phrases, " + ")
+end
+
+function UI.BuildEvidenceSummary(candidate)
+    if not candidate then
+        return "Select a row to view structured local and peer evidence."
     end
 
-    return prefix .. ": " .. joinSummaryPhrases(phrases) .. ". Suspicion, not proof."
+    local status = getStatus(candidate)
+    local network = candidate.network or {}
+    local peerCount = network.peerCount or 0
+    local localMessages = candidate.totalMessages or 0
+
+    if status == "Peer Context Only" or (localMessages == 0 and peerCount > 0) then
+        return "Observed: peer clients shared compact evidence. Meaning: this is informational peer context only. Why this status: this client has no local evidence."
+    end
+
+    if status == "Observing" then
+        return string.format(
+            "Observed: %d local messages. Meaning: not enough local evidence for a clear repeated pattern yet. Why this status: %s.",
+            localMessages,
+            getStatusReason(candidate)
+        )
+    end
+
+    local phrases = collectSignalPhrases(candidate, true)
+    return string.format(
+        "Observed: %s. Meaning: %s. Why this status: %s.",
+        joinSummaryPhrases(phrases),
+        status == "Early Pattern" and "early repeated chat behavior is present"
+            or "this repeated chat pattern is worth reviewing",
+        getStatusReason(candidate)
+    )
 end
 
 local function getIntervalCount(candidate)
@@ -665,19 +765,35 @@ function UI.GetCadenceDisplay(candidate)
     local globalEntropy = timing.globalEntropy
     local cadenceSwitches = timing.cadenceSwitchCount or 0
     local phaseCount = #(timing.cadencePhases or {})
+    local averageInterval = timing.averageInterval or 0
+    local medianInterval = timing.medianInterval or 0
+    local hasGapOutliers = medianInterval > 0 and averageInterval > (medianInterval * 1.5)
     local label = timing.cadenceClass or "Variable"
 
     if label == "Very Regular" then
         label = "Fixed Cadence"
     elseif label == "Regular" then
         label = "Jittered Cadence"
+    elseif label == "Dominant Cadence" then
+        label = "Dominant Active-Run Cadence"
+    elseif label == "Mixed Regular" then
+        label = "Mixed Cadence"
+    elseif label == "Burst-Only" then
+        label = "Burst Pattern"
     elseif intervalCount < 3 then
         label = "Sparse"
     elseif not cadenceRank[label] then
         if cadenceSwitches > 0 and phaseCount >= 2 then
-            label = "Mixed Regular"
-        elseif topBucketPercent >= 75 and (rollingEntropy or 1) <= 0.25 then
+            label = "Mixed Cadence"
+        elseif
+            topBucketPercent >= 95
+            and (rollingEntropy or 1) <= 0.25
+            and (globalEntropy or 1) <= 0.25
+            and not hasGapOutliers
+        then
             label = "Fixed Cadence"
+        elseif topBucketPercent >= 75 and (rollingEntropy or 1) <= 0.25 then
+            label = "Dominant Active-Run Cadence"
         elseif topBucketPercent >= 55 and (rollingEntropy or 1) <= 0.45 then
             label = "Jittered Cadence"
         else
@@ -698,13 +814,16 @@ function UI.GetCadenceDisplay(candidate)
 
     if label == "Sparse" then
         tooltip[#tooltip + 1] = "Not enough interval samples for a strong timing read."
-    elseif label == "Mixed Regular" then
+    elseif label == "Mixed Cadence" then
         tooltip[#tooltip + 1] = "Multiple stable posting cadences were detected."
     elseif label == "Fixed Cadence" then
-        tooltip[#tooltip + 1] = "Recent intervals are highly concentrated around one cadence."
+        tooltip[#tooltip + 1] = "Nearly all intervals are concentrated around one cadence."
+    elseif label == "Dominant Active-Run Cadence" then
+        tooltip[#tooltip + 1] =
+            "Active posting runs use one cadence, with gaps or outlier intervals in the full history."
     elseif label == "Jittered Cadence" then
         tooltip[#tooltip + 1] = "Timing has jitter, but still stays inside a repeatable cadence."
-    elseif label == "Burst-Only" then
+    elseif label == "Burst Pattern" then
         tooltip[#tooltip + 1] = "Activity is concentrated into bursts without enough regular cadence evidence."
     else
         tooltip[#tooltip + 1] = "Timing is spread out or lacks a stable cadence."
@@ -720,7 +839,7 @@ end
 
 local function scoreValue(candidate)
     local score = candidate.score or {}
-    return math.floor((score.displayScore or score.networkAdjustedScore or score.localScore or 0) + 0.5)
+    return math.floor((score.localScore or 0) + 0.5)
 end
 
 local function confidenceValue(candidate)
@@ -738,8 +857,10 @@ local function getSortValue(candidate, key)
         return isCandidateWatched(candidate) and 1 or 0
     elseif key == "character" then
         return string.lower(candidate.displayName or "")
-    elseif key == "tier" then
-        return tierRank[score.tier or "Insufficient Data"] or 0
+    elseif key == "status" then
+        return statusRank[getStatus(candidate)] or 0
+    elseif key == "signals" then
+        return UI.BuildObservedSignals(candidate)
     elseif key == "score" then
         return score.networkAdjustedScore or 0
     elseif key == "confidence" then
@@ -761,14 +882,14 @@ local function getSortValue(candidate, key)
     elseif key == "source" then
         return sourceRank[getSourceMarker(candidate)] or 0
     end
-    return score.networkAdjustedScore or 0
+    return statusRank[getStatus(candidate)] or 0
 end
 
 local function compareFallback(left, right)
-    local leftScore = left.score and left.score.networkAdjustedScore or 0
-    local rightScore = right.score and right.score.networkAdjustedScore or 0
-    if leftScore ~= rightScore then
-        return leftScore > rightScore
+    local leftStatus = statusRank[getStatus(left)] or 0
+    local rightStatus = statusRank[getStatus(right)] or 0
+    if leftStatus ~= rightStatus then
+        return leftStatus > rightStatus
     end
 
     local leftSeen = left.lastSeen or 0
@@ -782,7 +903,7 @@ end
 
 function UI.SortCandidates(candidates)
     local uiSettings = getSettingsUi()
-    local sortKey = uiSettings.sortKey or "score"
+    local sortKey = uiSettings.sortKey or "status"
     local sortDescending = uiSettings.sortDescending ~= false
     local decorated = {}
 
@@ -832,10 +953,11 @@ end
 function UI.FilterCandidates(candidates)
     local uiSettings = getSettingsUi()
     local filterKey = uiSettings.filterKey or "active"
+    local channelFilter = validateChannelFilter(uiSettings, candidates)
     local filtered = {}
 
     for _, candidate in ipairs(candidates or {}) do
-        if candidateMatchesFilter(candidate, filterKey) then
+        if candidateMatchesFilter(candidate, filterKey) and candidateMatchesChannel(candidate, channelFilter) then
             filtered[#filtered + 1] = candidate
         end
     end
@@ -853,13 +975,24 @@ function UI.GetFilterState()
     return isValidFilterKey(uiSettings.filterKey) and uiSettings.filterKey or "active"
 end
 
+function UI.SetChannelFilter(channelName)
+    local uiSettings = getSettingsUi()
+    channelName = Util.Trim(channelName or "")
+    uiSettings.channelFilter = channelName ~= "" and channelName or nil
+end
+
+function UI.GetChannelFilterState()
+    local uiSettings = getSettingsUi()
+    return uiSettings.channelFilter
+end
+
 function UI.SetSort(key, descending)
     if not isSortableColumnKey(key) then
-        key = "score"
+        key = "status"
         descending = true
     end
     local uiSettings = getSettingsUi()
-    uiSettings.sortKey = key or "score"
+    uiSettings.sortKey = key or "status"
     uiSettings.sortDescending = descending ~= false
 end
 
@@ -926,6 +1059,108 @@ local function updateFilterButtons()
     end
 end
 
+local function getChannelDropdownLabel(channelName)
+    if not channelName or channelName == "" then
+        return "Channel: All"
+    end
+    return "Channel: " .. truncateChannelName(channelName, 22)
+end
+
+local function hideChannelFilterMenu()
+    if channelDropdownMenu then
+        channelDropdownMenu:Hide()
+    end
+end
+
+local function ensureChannelFilterMenu()
+    if channelDropdownMenu then
+        return channelDropdownMenu
+    end
+
+    channelDropdownMenu = createFrame("Frame", nil, frame or UIParent)
+    channelDropdownMenu:SetFrameStrata("DIALOG")
+    channelDropdownMenu:SetFrameLevel(120)
+    channelDropdownMenu.bg = channelDropdownMenu:CreateTexture(nil, "BACKGROUND")
+    channelDropdownMenu.bg:SetAllPoints()
+    channelDropdownMenu.bg:SetColorTexture(0.04, 0.04, 0.05, 0.96)
+    channelDropdownMenu:Hide()
+    return channelDropdownMenu
+end
+
+local function updateChannelFilterDropdown()
+    if not channelDropdownButton then
+        return
+    end
+
+    local allCandidates = Storage.GetAllCandidates()
+    local uiSettings = getSettingsUi()
+    local channelFilter = validateChannelFilter(uiSettings, allCandidates)
+    channelDropdownButton:SetText(getChannelDropdownLabel(channelFilter))
+end
+
+local function showChannelFilterMenu()
+    if not channelDropdownButton then
+        return
+    end
+
+    local menu = ensureChannelFilterMenu()
+    local options = UI.GetChannelFilterOptions(Storage.GetAllCandidates())
+    local selected = UI.GetChannelFilterState()
+    local rowHeight = 22
+    local rowWidth = 214
+    local optionCount = #options + 1
+
+    menu:ClearAllPoints()
+    menu:SetPoint("TOPLEFT", channelDropdownButton, "BOTTOMLEFT", 0, -2)
+    menu:SetSize(rowWidth + 8, (optionCount * rowHeight) + 8)
+
+    for index = 1, optionCount do
+        local button = channelDropdownButtons[index]
+        if not button then
+            button = createButton(menu, "", rowWidth, rowHeight)
+            button:SetScript("OnClick", function(self)
+                UI.SetChannelFilter(self.channelFilter)
+                hideChannelFilterMenu()
+                updateChannelFilterDropdown()
+                UI.Refresh()
+            end)
+            bindTooltip(button, "Channel Filter", function(self)
+                return { self.channelFilter or "All Channels" }
+            end)
+            channelDropdownButtons[index] = button
+        end
+
+        local channelName = index == 1 and nil or options[index - 1]
+        button.channelFilter = channelName
+        button:ClearAllPoints()
+        button:SetPoint("TOPLEFT", menu, "TOPLEFT", 4, -4 - ((index - 1) * rowHeight))
+        button:SetText(channelName and truncateChannelName(channelName, 24) or "All Channels")
+        if button.SetAlpha then
+            local active = channelName == selected or (not channelName and not selected)
+            button:SetAlpha(active and 1 or 0.82)
+        end
+        button:Show()
+    end
+
+    for index = optionCount + 1, #channelDropdownButtons do
+        channelDropdownButtons[index]:Hide()
+    end
+
+    menu:Show()
+end
+
+function UI.GetChannelDropdownState()
+    local options = UI.GetChannelFilterOptions(Storage.GetAllCandidates())
+    return {
+        selected = UI.GetChannelFilterState(),
+        label = channelDropdownButton
+                and (channelDropdownButton.GetText and channelDropdownButton:GetText() or channelDropdownButton.text)
+            or nil,
+        menuShown = channelDropdownMenu and channelDropdownMenu:IsShown() or false,
+        options = options,
+    }
+end
+
 local function setRowVisual(row)
     if not row or not row.bg then
         return
@@ -957,12 +1192,14 @@ local function showCandidateTooltip(owner)
 
     local cadence = UI.GetCadenceDisplay(candidate)
     local score = candidate.score or {}
+    local status = getStatus(candidate)
 
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip:AddLine(candidate.displayName or "Candidate", 1, 1, 1)
-    GameTooltip:AddDoubleLine("Tier", score.tier or "Insufficient Data", 0.85, 0.85, 0.85, 1, 0.82, 0.20)
-    GameTooltip:AddDoubleLine("Score", tostring(scoreValue(candidate)), 0.85, 0.85, 0.85, 1, 1, 1)
-    GameTooltip:AddDoubleLine("Confidence", Util.FormatPercent(score.confidence or 0), 0.85, 0.85, 0.85, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Status", status, 0.85, 0.85, 0.85, 1, 0.82, 0.20)
+    GameTooltip:AddDoubleLine("Pattern Strength", tostring(scoreValue(candidate)), 0.85, 0.85, 0.85, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Local Evidence", Util.FormatPercent(score.confidence or 0), 0.85, 0.85, 0.85, 1, 1, 1)
+    GameTooltip:AddLine("Signals: " .. UI.BuildObservedSignals(candidate), 0.85, 0.85, 0.85, true)
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("Cadence: " .. cadence.label, 1, 0.82, 0.2)
     for _, line in ipairs(cadence.tooltip or {}) do
@@ -1206,16 +1443,7 @@ local function createReportAssistFrame()
     statusBg:SetColorTexture(0.05, 0.05, 0.06, 0.58)
     assistStatus.bg = statusBg
 
-    local instruction = createFont(
-        assistStatus,
-        "OVERLAY",
-        "GameFontNormalSmall",
-        "LEFT",
-        assistStatus,
-        "LEFT",
-        8,
-        0
-    )
+    local instruction = createFont(assistStatus, "OVERLAY", "GameFontNormalSmall", "LEFT", assistStatus, "LEFT", 8, 0)
     instruction:SetWidth(REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2) - 16)
     instruction:SetText("In Blizzard's report window, select Cheating > Botting.")
     reportAssistFrame.instruction = instruction
@@ -1297,7 +1525,7 @@ local function createReportAssistFrame()
         OUTER_MARGIN,
         -252
     )
-    evidenceHeader:SetText("Most meaningful suspicious behavior")
+    evidenceHeader:SetText("Most meaningful observed behavior")
     reportAssistFrame.evidenceHeader = evidenceHeader
     reportAssistFrame.evidenceDivider =
         addDivider(reportAssistFrame, OUTER_MARGIN, -269, REPORT_ASSIST_WIDTH - (OUTER_MARGIN * 2))
@@ -1408,14 +1636,16 @@ openReportAssistForCandidate = function(candidate)
         return false, nil
     end
     if not Report.IsCriticalCandidate(candidate) then
-        Util.Print("Report assist is available for Critical candidates only.")
+        Util.Print("Report assist is available for Very Strong Pattern candidates only.")
         return false, nil
     end
 
     local opened, diagnostic = Report.OpenBottingReport(candidate)
     showReportAssist(candidate, opened, diagnostic)
     if opened then
-        Util.Print("Opened Blizzard report frame. Select Cheating > Botting, paste the assist text, and review before submitting.")
+        Util.Print(
+            "Opened Blizzard report frame. Select Cheating > Botting, paste the assist text, and review before submitting."
+        )
     else
         Util.Print("Could not open botting report: " .. tostring(diagnostic and diagnostic.reason or "unknown"))
     end
@@ -1490,6 +1720,7 @@ local function refreshDetails(candidate)
     local familyScores = score.familyScores or {}
     local baseline = candidate.baseline or {}
     local cadence = UI.GetCadenceDisplay(candidate)
+    local status = getStatus(candidate)
     local channels = {}
     for _, key in ipairs(Util.TableKeysSorted(candidate.channels)) do
         channels[#channels + 1] = key
@@ -1499,9 +1730,9 @@ local function refreshDetails(candidate)
     positionReportButton()
     detail.subtitle:SetText(UI.BuildEvidenceSummary(candidate))
 
-    setGroupLine("summary", 1, "Tier", score.tier or "Insufficient Data")
-    setGroupLine("summary", 2, "Local Score", tostring(math.floor((score.localScore or 0) + 0.5)))
-    setGroupLine("summary", 3, "Evidence Strength", Util.FormatPercent(score.confidence or 0))
+    setGroupLine("summary", 1, "Status", status)
+    setGroupLine("summary", 2, "Pattern Strength", tostring(math.floor((score.localScore or 0) + 0.5)))
+    setGroupLine("summary", 3, "Local Evidence", Util.FormatPercent(score.confidence or 0))
     setGroupLine("summary", 4, "Review", getTriageSummary(candidate))
     setGroupLine("summary", 5, "Evidence Source", getEvidenceSourceText(candidate))
 
@@ -1527,7 +1758,7 @@ local function refreshDetails(candidate)
     setGroupLine("content", 4, "Near-Duplicate Messages", tostring(content.nearDuplicateCount or 0))
     setGroupLine("content", 5, "Ad-like Messages", tostring(content.adIntentTotal or 0))
 
-    setGroupLine("families", 1, "Evidence Groups", tostring(score.evidenceFamilyCount or 0))
+    setGroupLine("families", 1, "Signal Types", tostring(score.evidenceFamilyCount or 0))
     setGroupLine("families", 2, "Timing", tostring(familyScores.timing or 0) .. " / 35")
     setGroupLine("families", 3, "Content", tostring(familyScores.content or 0) .. " / 30")
     setGroupLine("families", 4, "Activity", tostring(familyScores.activity or 0) .. " / 20")
@@ -1546,7 +1777,7 @@ local function refreshDetails(candidate)
     setGroupLine(
         "network",
         4,
-        "Local Score / Peer Signal",
+        "Pattern Strength / Peer Signal",
         string.format("%d / %d", score.localScore or 0, score.networkScore or 0)
     )
 
@@ -1621,8 +1852,8 @@ function UI.GetReportAssistState()
         status = reportAssistFrame and reportAssistFrame.statusText and reportAssistFrame.statusText.text or "",
         bullets = bullets,
         clearReportedEnabled = reportAssistFrame
-            and reportAssistFrame.clearReportedButton
-            and reportAssistFrame.clearReportedButton.enabled == true
+                and reportAssistFrame.clearReportedButton
+                and reportAssistFrame.clearReportedButton.enabled == true
             or false,
     }
 end
@@ -1817,7 +2048,9 @@ local function setWatchButtonVisual(button, candidate)
             atlasSet = pcall(button.icon.SetAtlas, button.icon, "common-icon-eye", true)
         end
         if not atlasSet and button.icon.SetTexture then
-            button.icon:SetTexture(watched and "Interface\\Buttons\\UI-CheckBox-Check" or "Interface\\Buttons\\UI-CheckBox-Up")
+            button.icon:SetTexture(
+                watched and "Interface\\Buttons\\UI-CheckBox-Check" or "Interface\\Buttons\\UI-CheckBox-Up"
+            )
         end
     end
     if button.SetAlpha then
@@ -1934,29 +2167,28 @@ local function setRowFieldByKey(row, key, text, color)
 end
 
 local function populateRow(row, candidate)
-    local score = candidate.score or {}
     local timing = candidate.timing or {}
     local content = candidate.content or {}
-    local behavior = candidate.behavior or {}
     local cadence = UI.GetCadenceDisplay(candidate)
-    local tier = score.tier or "Insufficient Data"
+    local status = getStatus(candidate)
 
     row.candidate = candidate
     row.selected = candidate.fullKey == selectedKey
     row:Show()
 
     setWatchButtonVisual(row.watchButton, candidate)
-    setRowFieldByKey(row, "character", candidate.displayName or "-", isCandidateIgnored(candidate) and { 0.62, 0.62, 0.62 } or { 1, 1, 1 })
-    setRowFieldByKey(row, "tier", tier, tierColors[tier])
-    setRowFieldByKey(row, "score", tostring(scoreValue(candidate)), { 1, 1, 1 })
-    setRowFieldByKey(row, "confidence", Util.FormatPercent(confidenceValue(candidate)), { 0.88, 0.88, 0.88 })
-    setRowFieldByKey(row, "firstSeen", formatFirstSeen(candidate), { 0.82, 0.82, 0.82 })
-    setRowFieldByKey(row, "lastSeen", formatLastSeen(candidate), { 0.82, 0.82, 0.82 })
+    setRowFieldByKey(
+        row,
+        "character",
+        candidate.displayName or "-",
+        isCandidateIgnored(candidate) and { 0.62, 0.62, 0.62 } or { 1, 1, 1 }
+    )
+    setRowFieldByKey(row, "status", status, statusColors[status])
+    setRowFieldByKey(row, "signals", UI.BuildObservedSignals(candidate), { 0.92, 0.92, 0.92 })
     setRowFieldByKey(row, "messages", tostring(candidate.totalMessages or 0), { 1, 1, 1 })
-    setRowFieldByKey(row, "rate", Util.FormatNumber(behavior.postsPerHour or 0, 1), { 1, 1, 1 })
-    setRowFieldByKey(row, "averageInterval", Util.FormatDuration(timing.averageInterval or 0), { 0.92, 0.92, 0.92 })
     setRowFieldByKey(row, "cadence", cadence.label, cadence.color)
     setRowFieldByKey(row, "reuse", Util.FormatPercent(content.templateReusePercent or 0), { 1, 1, 1 })
+    setRowFieldByKey(row, "lastSeen", formatLastSeen(candidate), { 0.82, 0.82, 0.82 })
     setRowFieldByKey(row, "source", getSourceMarker(candidate), { 0.82, 0.92, 1.00 })
 
     setRowVisual(row)
@@ -1983,7 +2215,7 @@ local function createTable(parent)
     emptyState = createFont(parent, "OVERLAY", "GameFontDisableSmall", "CENTER", tableScroll, "CENTER", 0, 0)
     emptyState:SetWidth(TABLE_CONTENT_WIDTH)
     emptyState:SetJustifyH("CENTER")
-    emptyState:SetText("No tracked candidates yet. Monitoring Trade and Services.")
+    emptyState:SetText("No tracked candidates yet. Monitoring joined public channels.")
     emptyState:Hide()
 end
 
@@ -2034,7 +2266,7 @@ local function createDetails(parent)
         openReportAssistForCandidate(selectedCandidate)
     end)
     bindTooltip(reportButton, "Report", {
-        "Opens Blizzard's in-world report flow for a Critical candidate when a reportable player location is available.",
+        "Opens Blizzard's in-world report flow for a Very Strong Pattern candidate when a reportable player location is available.",
         "The addon does not submit the report.",
     })
     detail.reportButton = reportButton
@@ -2058,7 +2290,7 @@ local function createDetails(parent)
     end)
     bindTooltip(watchButton, "Watch", {
         "Keeps the selected candidate visible in the clean Active view.",
-        "This is local display state and does not change score.",
+        "This is local display state and does not change pattern strength.",
     })
     detail.watchButton = watchButton
     parent.watchButton = watchButton
@@ -2071,11 +2303,7 @@ local function createDetails(parent)
         end
         local ignored = Storage.SetIgnored(selectedCandidate, not isCandidateIgnored(selectedCandidate))
         Util.Print(
-            string.format(
-                "%s %s.",
-                ignored and "Ignored" or "Unignored",
-                tostring(selectedCandidate.displayName)
-            )
+            string.format("%s %s.", ignored and "Ignored" or "Unignored", tostring(selectedCandidate.displayName))
         )
         UI.Refresh()
     end)
@@ -2130,13 +2358,13 @@ local function createDetails(parent)
         network = createSection(parent, "Peer Evidence", OUTER_MARGIN, DETAIL_TOP - 220, 340, 4),
         timing = createSection(parent, "Timing", 380, DETAIL_TOP, 350, 9),
         content = createSection(parent, "Content", 380, DETAIL_TOP - 176, 330, 5),
-        families = createSection(parent, "Local Score Breakdown", 760, DETAIL_TOP, 360, 6),
+        families = createSection(parent, "Why This Was Flagged", 760, DETAIL_TOP, 360, 6),
         baseline = createSection(parent, "Local Channel Baseline", 760, DETAIL_TOP - 146, 360, 5),
     }
 
     local reasonHeader =
         createFont(parent, "OVERLAY", "GameFontNormalSmall", "TOPLEFT", parent, "TOPLEFT", 760, REASONS_TOP)
-    reasonHeader:SetText("Main Signals")
+    reasonHeader:SetText("Observed Signals")
     detail.reasonHeader = reasonHeader
 
     local divider = parent:CreateTexture(nil, "ARTWORK")
@@ -2193,7 +2421,7 @@ local function createStatusStrip(parent)
     local hint = createFont(statusFrame, "OVERLAY", "GameFontDisableSmall", "RIGHT", statusFrame, "RIGHT", -8, 0)
     hint:SetWidth(360)
     hint:SetJustifyH("RIGHT")
-    hint:SetText("Scores are likelihood signals, not proof of botting.")
+    hint:SetText("Shows observed chat patterns for review, not verdicts.")
     parent.statusHintText = hint
 
     bindTooltip(statusFrame, "Live Scanner Status", function()
@@ -2227,7 +2455,25 @@ local function createFilterBar(parent)
         filterButtons[filter.key] = button
         x = x + width + 6
     end
+
+    channelDropdownButton = createButton(filterFrame, "Channel: All", 180, 22)
+    channelDropdownButton:SetPoint("LEFT", filterFrame, "LEFT", x + 8, 0)
+    channelDropdownButton:SetScript("OnClick", function()
+        if channelDropdownMenu and channelDropdownMenu:IsShown() then
+            hideChannelFilterMenu()
+        else
+            showChannelFilterMenu()
+        end
+    end)
+    bindTooltip(channelDropdownButton, "Channel Filter", function()
+        local selected = UI.GetChannelFilterState()
+        return {
+            selected and ("Showing candidates seen in " .. selected .. ".") or "Showing candidates from all channels.",
+        }
+    end)
+
     updateFilterButtons()
+    updateChannelFilterDropdown()
 end
 
 local function confirmPopup(name, text, onAccept)
@@ -2332,11 +2578,12 @@ function UI.Refresh()
     refreshCount = refreshCount + 1
     updateHeaderLabels()
     updateFilterButtons()
+    updateChannelFilterDropdown()
 
     local allCandidates = Storage.GetAllCandidates()
     local candidates = UI.SortCandidates(UI.FilterCandidates(allCandidates))
     if #allCandidates == 0 then
-        emptyState:SetText("No tracked candidates yet. Monitoring Trade and Services.")
+        emptyState:SetText("No tracked candidates yet. Monitoring joined public channels.")
     else
         emptyState:SetText("No candidates match the current filter.")
     end
@@ -2422,7 +2669,7 @@ function UI.Create()
     frame.subtitle =
         createFont(frame, "OVERLAY", "GameFontDisableSmall", "TOPLEFT", frame, "TOPLEFT", OUTER_MARGIN, SUBTITLE_TOP)
     frame.subtitle:SetWidth(HEADER_CONTENT_WIDTH)
-    frame.subtitle:SetText("Chat-based suspicion report for Trade and Services.")
+    frame.subtitle:SetText("Chat evidence viewer for repeated public-channel patterns.")
 
     frame.iconArea = createFrame("Frame", nil, frame)
     frame.iconArea:SetSize(WINDOW_ICON_SIZE, WINDOW_ICON_SIZE)

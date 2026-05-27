@@ -11,6 +11,7 @@ ignore:
   - .stylua.toml
   - .gitignore
   - README.md
+  - docs
   - logo.png
   - scripts
   - tests

@@ -9,12 +9,16 @@ local Util = BBT.Util
 local Normalizer = BBT.Normalizer
 local Scoring = BBT.Scoring
 
-local SCHEMA_VERSION = 3
-local FEATURE_VERSION = 3
+local SCHEMA_VERSION = 4
+local FEATURE_VERSION = 4
+local CURRENT_DATA_EPOCH = 20260527
+local DATA_RESET_REASON = "player-facing-detection-cutover"
 local OBSERVATION_WINDOW_SECONDS = 1800
 
 local DEFAULT_DB = {
     schemaVersion = SCHEMA_VERSION,
+    featureVersion = FEATURE_VERSION,
+    dataEpoch = CURRENT_DATA_EPOCH,
     settings = {
         debug = false,
         sync = {
@@ -59,7 +63,8 @@ local DEFAULT_DB = {
         },
         baseline = {
             sampleCooldown = 300,
-            minSamples = 8,
+            minSamples = 50,
+            matureSamples = 200,
         },
         ui = {
             sortKey = "score",
@@ -67,6 +72,7 @@ local DEFAULT_DB = {
             filterKey = "active",
         },
         monitor = {
+            public = true,
             trade = true,
             services = true,
         },
@@ -77,6 +83,7 @@ local DEFAULT_DB = {
         realms = {},
     },
     peers = {},
+    resetHistory = {},
 }
 
 local function createCandidate(identity, now, source)
@@ -99,8 +106,7 @@ local function createCandidate(identity, now, source)
         lastLineID = nil,
         lastReportObservedAt = nil,
         lastReportDiagnostic = nil,
-        triage = {
-        },
+        triage = {},
         totalMessages = 0,
         timing = {
             intervals = {},
@@ -141,7 +147,7 @@ local function createCandidate(identity, now, source)
         },
         baseline = {
             sampleCount = 0,
-            label = "Collecting baseline",
+            label = "Baseline warming up",
         },
         features = {
             version = FEATURE_VERSION,
@@ -154,7 +160,9 @@ local function createCandidate(identity, now, source)
             networkAdjustedScore = 0,
             networkScore = 0,
             networkConfidence = 0,
-            tier = "Insufficient Data",
+            tier = "Observing",
+            status = "Observing",
+            statusCapReasons = {},
             confidence = 0,
             evidenceFamilyCount = 0,
             familyScores = {},
@@ -222,11 +230,13 @@ local function ensureCandidateShape(candidate)
     candidate.network.peers = candidate.network.peers or {}
     candidate.network.peerCount = candidate.network.peerCount or 0
     candidate.network.overlap = candidate.network.overlap or "None"
-    candidate.baseline = candidate.baseline or { sampleCount = 0, label = "Collecting baseline" }
+    candidate.baseline = candidate.baseline or { sampleCount = 0, label = "Baseline warming up" }
     candidate.features = candidate.features or { version = FEATURE_VERSION, familyScores = {}, familyCount = 0 }
     candidate.score = candidate.score or {}
     candidate.score.familyScores = candidate.score.familyScores or {}
     candidate.score.reasons = candidate.score.reasons or {}
+    candidate.score.status = candidate.score.status or candidate.score.tier or "Observing"
+    candidate.score.statusCapReasons = candidate.score.statusCapReasons or {}
     ensureTriage(candidate)
 end
 
@@ -305,13 +315,117 @@ local function mergeBaselineBins(target, source)
     end
 end
 
-function Storage.Initialize()
-    if type(BigBotTrackerDB) ~= "table" or BigBotTrackerDB.schemaVersion ~= SCHEMA_VERSION then
-        BigBotTrackerDB = Util.Clone(DEFAULT_DB)
-    else
-        Util.MergeDefaults(BigBotTrackerDB, DEFAULT_DB)
+local function copyIfPresent(source, target, key)
+    if type(source) == "table" and source[key] ~= nil then
+        target[key] = Util.Clone(source[key])
+    end
+end
+
+local function preserveSettings(previousSettings)
+    local settings = Util.Clone(DEFAULT_DB.settings)
+    if type(previousSettings) ~= "table" then
+        return settings
     end
 
+    copyIfPresent(previousSettings, settings, "debug")
+
+    settings.sync = settings.sync or {}
+    for _, key in ipairs({
+        "enabled",
+        "firstRunNoticeShown",
+        "includeGuild",
+        "includeGroup",
+        "sendInterval",
+        "candidateCooldown",
+        "maxQueueSize",
+        "maxCapsuleAgeSeconds",
+    }) do
+        copyIfPresent(previousSettings.sync, settings.sync, key)
+    end
+    settings.sync.channelName = nil
+    settings.sync.prefix = nil
+
+    settings.monitor = settings.monitor or {}
+    for _, key in ipairs({ "public", "trade", "services" }) do
+        copyIfPresent(previousSettings.monitor, settings.monitor, key)
+    end
+
+    settings.ui = settings.ui or {}
+    for _, key in ipairs({ "sortKey", "sortDescending", "filterKey", "channelFilter" }) do
+        copyIfPresent(previousSettings.ui, settings.ui, key)
+    end
+
+    return settings
+end
+
+local function detectPreviousFeatureVersion(previousDb)
+    if type(previousDb) ~= "table" then
+        return nil
+    end
+    if previousDb.featureVersion then
+        return previousDb.featureVersion
+    end
+    for _, realmCandidates in pairs(previousDb.candidates or {}) do
+        if type(realmCandidates) == "table" then
+            for _, candidate in pairs(realmCandidates) do
+                if type(candidate) == "table" then
+                    if candidate.featureVersion then
+                        return candidate.featureVersion
+                    end
+                    if candidate.features and candidate.features.version then
+                        return candidate.features.version
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function installFreshDb(previousDb)
+    local previousSettings = type(previousDb) == "table" and previousDb.settings or nil
+    local resetRecord
+    if type(previousDb) == "table" then
+        resetRecord = {
+            previousSchemaVersion = previousDb.schemaVersion,
+            previousFeatureVersion = detectPreviousFeatureVersion(previousDb),
+            previousDataEpoch = previousDb.dataEpoch,
+            resetAt = Util.GetNow(),
+            dataEpoch = CURRENT_DATA_EPOCH,
+            reason = DATA_RESET_REASON,
+        }
+    end
+
+    BigBotTrackerDB = Util.Clone(DEFAULT_DB)
+    BigBotTrackerDB.settings = preserveSettings(previousSettings)
+
+    if resetRecord then
+        BigBotTrackerDB.resetHistory = { resetRecord }
+        BigBotTrackerDB._freshEvidenceCutoverNotice = true
+    end
+end
+
+local function normalizeCurrentDb()
+    Util.MergeDefaults(BigBotTrackerDB, DEFAULT_DB)
+    BigBotTrackerDB.schemaVersion = SCHEMA_VERSION
+    BigBotTrackerDB.featureVersion = FEATURE_VERSION
+    BigBotTrackerDB.dataEpoch = CURRENT_DATA_EPOCH
+    BigBotTrackerDB.resetHistory = BigBotTrackerDB.resetHistory or {}
+    while #BigBotTrackerDB.resetHistory > 2 do
+        table.remove(BigBotTrackerDB.resetHistory, 1)
+    end
+end
+
+function Storage.Initialize()
+    if type(BigBotTrackerDB) ~= "table" then
+        installFreshDb(nil)
+    elseif BigBotTrackerDB.dataEpoch ~= CURRENT_DATA_EPOCH then
+        installFreshDb(BigBotTrackerDB)
+    else
+        normalizeCurrentDb()
+    end
+
+    normalizeCurrentDb()
     BigBotTrackerDB.settings.sync.channelName = nil
     BigBotTrackerDB.settings.sync.prefix = nil
 
@@ -321,6 +435,9 @@ function Storage.Initialize()
     BBT.runtime.recentNormalized = BBT.runtime.recentNormalized or {}
     BBT.runtime.seenLines = BBT.runtime.seenLines or {}
     BBT.runtime.baselineSampled = BBT.runtime.baselineSampled or {}
+    if BigBotTrackerDB._freshEvidenceCutoverNotice then
+        Storage.ClearRuntimeBuffers()
+    end
 
     for _, realmCandidates in pairs(BigBotTrackerDB.candidates) do
         for _, candidate in pairs(realmCandidates) do
@@ -329,10 +446,21 @@ function Storage.Initialize()
     end
 
     refreshExistingCandidates()
+
+    if BigBotTrackerDB._freshEvidenceCutoverNotice then
+        BigBotTrackerDB._freshEvidenceCutoverNotice = nil
+        Util.Print(
+            "Big Bot Tracker started fresh for the updated evidence model. Older saved candidates and metrics were cleared."
+        )
+    end
 end
 
 function Storage.GetSettings()
     return BBT.DB and BBT.DB.settings or DEFAULT_DB.settings
+end
+
+function Storage.GetCurrentDataEpoch()
+    return CURRENT_DATA_EPOCH
 end
 
 function Storage.GetCandidate(identity)
@@ -615,7 +743,7 @@ function Storage.GetBaselineComparison(candidate)
         postsPerHourPercentile = 0,
         regularityPercentile = 0,
         templateReusePercentile = 0,
-        label = "Collecting baseline",
+        label = "Baseline warming up",
     }
     if not BBT.DB or not candidate then
         return result
@@ -665,8 +793,10 @@ function Storage.GetBaselineComparison(candidate)
     result.templateReusePercentile = percentileFromBins(merged.templateReuseBins, reuse, merged.sampleCount)
 
     local best = math.max(result.postsPerHourPercentile, result.regularityPercentile, result.templateReusePercentile)
-    if merged.sampleCount < (Storage.GetSettings().baseline.minSamples or 8) then
-        result.label = "Collecting baseline"
+    local baselineSettings = Storage.GetSettings().baseline or {}
+    local minSamples = baselineSettings.minSamples or 50
+    if merged.sampleCount < minSamples then
+        result.label = "Baseline warming up"
     elseif best >= 95 then
         result.label = "Above 95th percentile"
     elseif best >= 90 then
@@ -684,7 +814,7 @@ function Storage.IsHighVolumeOutlier(identity, channelKey, count, windowSeconds)
         and BBT.DB.baselines.realms
         and BBT.DB.baselines.realms[identity and identity.realmKey or "unknown"]
     local baseline = realm and realm.channels and realm.channels[channelKey or "unknown"]
-    if not baseline or (baseline.sampleCount or 0) < (Storage.GetSettings().baseline.minSamples or 8) then
+    if not baseline or (baseline.sampleCount or 0) < (Storage.GetSettings().baseline.minSamples or 50) then
         return false
     end
 
@@ -997,6 +1127,8 @@ function Storage.MergeNetworkEvidence(capsule)
             or previousScore.localScore
             or candidate.score.networkAdjustedScore
         candidate.score.tier = previousScore.tier or candidate.score.tier
+        candidate.score.status = previousScore.status or previousScore.tier or candidate.score.status
+        candidate.score.statusCapReasons = previousScore.statusCapReasons or candidate.score.statusCapReasons
         candidate.score.confidence = previousScore.confidence or candidate.score.confidence
         candidate.score.evidenceFamilyCount = previousScore.evidenceFamilyCount or candidate.score.evidenceFamilyCount
         candidate.score.familyScores = previousScore.familyScores or candidate.score.familyScores
@@ -1033,7 +1165,11 @@ function Storage.PurgeAll()
     end
     BBT.DB.candidates = {}
     BBT.DB.templates = {}
+    BBT.DB.baselines = { realms = {} }
     BBT.DB.peers = {}
+    if BBT.DB.settings then
+        BBT.DB.settings.lastDebugSummary = nil
+    end
     Storage.ClearRuntimeBuffers()
 end
 
@@ -1054,10 +1190,10 @@ function Storage.BuildDebugSummary()
         local content = candidate.content or {}
         local baseline = candidate.baseline or {}
         rows[#rows + 1] = string.format(
-            "%d. %s | tier=%s score=%d confidence=%d families=%d messages=%d lastSeen=%s avgInterval=%ds reuse=%d%% shingle=%d%% baseline=%s peers=%d",
+            "%d. %s | status=%s patternStrength=%d localEvidence=%d families=%d messages=%d lastSeen=%s avgInterval=%ds reuse=%d%% shingle=%d%% baseline=%s peers=%d",
             index,
             candidate.displayName or "?",
-            score.tier or "Insufficient Data",
+            score.status or score.tier or "Observing",
             math.floor((score.networkAdjustedScore or 0) + 0.5),
             math.floor((score.confidence or 0) + 0.5),
             score.evidenceFamilyCount or 0,

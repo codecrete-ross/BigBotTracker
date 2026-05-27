@@ -10,12 +10,6 @@ local Normalizer = BBT.Normalizer
 local Storage = BBT.Storage
 local Scoring = BBT.Scoring
 
-local TARGET_CHANNEL_NAMES = {
-    trade = true,
-    services = true,
-    ["trade services"] = true,
-}
-
 local function normalizeChannelName(value)
     value = tostring(value or ""):lower()
     value = value:gsub("^%d+%.%s*", "")
@@ -26,27 +20,44 @@ local function normalizeChannelName(value)
     return value
 end
 
+local function getPlainChannelName(channelName, channelBaseName)
+    local base = Util.Trim(channelBaseName or "")
+    if base ~= "" then
+        return base
+    end
+
+    local full = Util.Trim(channelName or "")
+    full = full:gsub("^%d+%.%s*", "")
+    full = Util.Trim(full)
+    if full ~= "" then
+        return full
+    end
+
+    return nil
+end
+
 function ChatScanner.GetTargetChannel(channelName, channelBaseName)
+    local plain = getPlainChannelName(channelName, channelBaseName)
+    if not plain then
+        return nil
+    end
+
     local base = normalizeChannelName(channelBaseName)
     local full = normalizeChannelName(channelName)
     local settings = Storage.GetSettings()
     local monitor = settings.monitor or {}
+    local publicEnabled = monitor.public ~= false
 
-    if TARGET_CHANNEL_NAMES[base] or TARGET_CHANNEL_NAMES[full] then
-        if base:find("services") or full:find("services") then
-            return monitor.services ~= false and "services" or nil
-        end
-        return monitor.trade ~= false and "trade" or nil
+    local isServices = base:find("services", 1, true) or full:find("services", 1, true)
+    local isTrade = base:find("trade", 1, true) or full:find("trade", 1, true)
+    if isServices then
+        return monitor.services ~= false and plain or nil
+    end
+    if isTrade then
+        return monitor.trade ~= false and plain or nil
     end
 
-    if base:find("services") or full:find("services") then
-        return monitor.services ~= false and "services" or nil
-    end
-    if base:find("trade") or full:find("trade") then
-        return monitor.trade ~= false and "trade" or nil
-    end
-
-    return nil
+    return publicEnabled and plain or nil
 end
 
 local function getPretrack(identity)

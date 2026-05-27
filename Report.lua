@@ -89,7 +89,10 @@ local function buildIntervalFragment(candidate)
     end
 
     local regularCadence = cadenceClass == "Fixed Cadence"
+        or cadenceClass == "Dominant Active-Run Cadence"
+        or cadenceClass == "Dominant Cadence"
         or cadenceClass == "Jittered Cadence"
+        or cadenceClass == "Mixed Cadence"
         or cadenceClass == "Mixed Regular"
     if regularCadence then
         if interval > 0 then
@@ -152,11 +155,11 @@ local function buildRateFragment(candidate)
     return nil
 end
 
-local function buildConfidenceFragment(candidate)
+local function buildLocalEvidenceFragment(candidate)
     local score = candidate and candidate.score or {}
-    local confidence = score.confidence or 0
-    if confidence > 0 then
-        return string.format("%d%% confidence", math.floor(confidence + 0.5))
+    local localEvidence = score.confidence or 0
+    if localEvidence > 0 then
+        return string.format("%d%% local evidence", math.floor(localEvidence + 0.5))
     end
     return nil
 end
@@ -183,7 +186,7 @@ local function renderReportComment(base, parts, confidencePart)
 end
 
 local function composeReportComment(parts, confidencePart)
-    local base = "Big Bot Tracker: Suspected automated trade ads"
+    local base = "Big Bot Tracker: Repeated advertising pattern"
     local kept = {}
 
     for _, part in ipairs(parts) do
@@ -344,8 +347,7 @@ local function checkInWorldBottingCategory()
         return status
     end
 
-    local okMajor, majorCategories, majorError =
-        safeCall(C_ReportSystem.GetMajorCategoriesForReportType, enums.inWorld)
+    local okMajor, majorCategories, majorError = safeCall(C_ReportSystem.GetMajorCategoriesForReportType, enums.inWorld)
     if not okMajor then
         status.error = majorError
         return status
@@ -393,7 +395,8 @@ local function writeDiagnostic(candidate, diagnostic)
 end
 
 function Report.IsCriticalCandidate(candidate)
-    return candidate and candidate.score and candidate.score.tier == "Critical"
+    local score = candidate and candidate.score or {}
+    return score.status == "Very Strong Pattern" or score.tier == "Very Strong Pattern"
 end
 
 function Report.BuildReportComment(candidate)
@@ -403,7 +406,7 @@ function Report.BuildReportComment(candidate)
     addPart(parts, buildReuseFragment(candidate))
     addPart(parts, buildPersistenceFragment(candidate))
     addPart(parts, buildRateFragment(candidate))
-    return composeReportComment(parts, buildConfidenceFragment(candidate))
+    return composeReportComment(parts, buildLocalEvidenceFragment(candidate))
 end
 
 function Report.BuildReportAssist(candidate)
@@ -419,13 +422,13 @@ function Report.BuildReportAssist(candidate)
             bullets,
             seen,
             string.format(
-                "Suspicious cadence: %d%% of intervals were near %s.",
+                "Observed timing: %d%% of intervals were near %s.",
                 math.floor((topBucket.percent or 0) + 0.5),
                 formatDurationCompact(topBucket.bucket or timing.medianInterval or timing.averageInterval or 0)
             )
         )
     elseif buildIntervalFragment(candidate) then
-        addEvidenceBullet(bullets, seen, "Suspicious timing: " .. buildIntervalFragment(candidate) .. ".")
+        addEvidenceBullet(bullets, seen, "Observed timing: " .. buildIntervalFragment(candidate) .. ".")
     end
 
     local messages = candidate and candidate.totalMessages or 0
@@ -444,10 +447,12 @@ function Report.BuildReportAssist(candidate)
 
     local reuseDetails = {}
     if (content.templateReusePercent or 0) >= 40 then
-        reuseDetails[#reuseDetails + 1] = string.format("%d%% reused text", math.floor((content.templateReusePercent or 0) + 0.5))
+        reuseDetails[#reuseDetails + 1] =
+            string.format("%d%% reused text", math.floor((content.templateReusePercent or 0) + 0.5))
     end
     if (content.shingleReusePercent or 0) >= 55 then
-        reuseDetails[#reuseDetails + 1] = string.format("%d%% similar wording", math.floor((content.shingleReusePercent or 0) + 0.5))
+        reuseDetails[#reuseDetails + 1] =
+            string.format("%d%% similar wording", math.floor((content.shingleReusePercent or 0) + 0.5))
     end
     if (content.nearDuplicateCount or 0) > 0 then
         reuseDetails[#reuseDetails + 1] = plural(content.nearDuplicateCount or 0, "near-dupe", "near-dupes")
@@ -462,7 +467,7 @@ function Report.BuildReportAssist(candidate)
     end
 
     for _, reason in ipairs(score.reasons or {}) do
-        addEvidenceBullet(bullets, seen, "Suspicious signal: " .. tostring(reason))
+        addEvidenceBullet(bullets, seen, "Observed signal: " .. tostring(reason))
     end
 
     if #bullets < 2 then
@@ -470,7 +475,7 @@ function Report.BuildReportAssist(candidate)
             bullets,
             seen,
             string.format(
-                "Model context: local timing and repeated-ad evidence reached %d%% confidence.",
+                "Model context: local timing and repeated-ad evidence reached %d%% local evidence.",
                 math.floor((score.confidence or 0) + 0.5)
             )
         )
@@ -479,7 +484,7 @@ function Report.BuildReportAssist(candidate)
     return {
         comment = Report.BuildReportComment(candidate),
         commentLimit = REPORT_COMMENT_LIMIT,
-        instruction = "In Blizzard's report window, select Cheating > Botting.",
+        instruction = "If you report this in Blizzard's window, select Cheating > Botting.",
         bullets = bullets,
     }
 end
@@ -551,7 +556,7 @@ function Report.GetDiagnostics(candidate)
     diagnostic._selectedLocation = selectedLocation
 
     if not diagnostic.isCritical then
-        diagnostic.reason = "Candidate is not Critical."
+        diagnostic.reason = "Candidate is not Very Strong Pattern."
     elseif not diagnostic.inWorldHasBotting then
         diagnostic.reason = "In-world Botting category unavailable."
     elseif not selectedLocation then

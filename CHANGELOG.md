@@ -1,3 +1,12 @@
+## 2.0.0 - 2026-05-27
+
+- Player-facing evidence statuses: `Observing`, `Early Pattern`, `Repeated Pattern`, `Strong Pattern`, `Very Strong Pattern`, and `Peer Context Only`
+- Precision-first status gates, baseline maturity caps, clearer cadence labels, and report assist limited to `Very Strong Pattern`
+- One-time data epoch cutover that clears obsolete gathered evidence while preserving user preferences
+- Developer docs for detection model, strategy, player metrics, and data epoch policy
+- Joined public channel scanner with plain channel-name storage, including Classic custom public channels the player is already in
+- Data-driven channel dropdown filter in the report window
+
 ## 1.1.0
 
 - Retail and Classic-compatible interface metadata for Retail, Mists, Cataclysm, Titan, Wrath, TBC, and Classic Era clients

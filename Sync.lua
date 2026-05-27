@@ -11,7 +11,7 @@ local Normalizer = BBT.Normalizer
 
 local PREFIX = "BigBotTrack"
 local PROTOCOL_VERSION = 2
-local FEATURE_VERSION = 3
+local FEATURE_VERSION = 4
 local MAX_PAYLOAD_BYTES = 240
 local OBSERVATION_WINDOW_SECONDS = 1800
 
@@ -437,10 +437,7 @@ function Sync.HandleAddonMessage(prefix, message, channel, sender)
         return
     end
 
-    local allowedChannel = channel == "GUILD"
-        or channel == "PARTY"
-        or channel == "RAID"
-        or channel == "INSTANCE_CHAT"
+    local allowedChannel = channel == "GUILD" or channel == "PARTY" or channel == "RAID" or channel == "INSTANCE_CHAT"
     if not allowedChannel then
         return
     end

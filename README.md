@@ -4,34 +4,37 @@
   <img src="logo.png" alt="Big Bot Tracker logo" width="320" />
 </p>
 
-Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors Trade and Services chat for suspicious repeated advertising patterns.
+Big Bot Tracker is a World of Warcraft Retail and Classic addon that monitors joined public chat channels for repeated advertising patterns.
 
-It does **not** prove that someone is botting. It does not auto-report players, post accusations, block chat, or send public messages. It shows evidence so you can review the pattern yourself.
+It is an evidence viewer, not a verdict system. It does not auto-report players, post accusations, block chat, or send public messages. It shows observed chat patterns so you can review them yourself.
 
 ## What It Does
 
-- Watches Trade and Services chat, ignoring your own messages
+- Watches joined public chat channels, ignoring your own messages
+- Does not join channels; it only observes public channel messages your client already receives
 - Tracks chatters by normalized `character-realm`
 - Promotes local candidates only after signals such as repeated templates, near-duplicate wording, regular timing, or high volume with ad-like behavior
 - Shows timing, content reuse, activity, persistence, current-channel baseline, and network context
 - Keeps local evidence and network evidence separate
 - Uses transparent heuristic scoring, not machine learning or external services
 
-Message count alone is not treated as suspicion. Network sync can create `Preliminary` network-only entries, but peer evidence does not raise a local score, confidence, or tier.
+Message count alone is not treated as a pattern. Network sync can create `Peer Context Only` entries, but peer evidence does not raise local status, pattern strength, or local evidence.
 
 ## Report Window
 
 Open the report with `/bbt`, `/bbt open`, `/bbt show`, `/bigbottracker`, or the addon compartment button.
 
-The table shows a watch toggle, character-realm, tier, score, confidence, first/last seen, message count, posts per hour, average interval, cadence, template reuse, and source: `Local`, `Net`, or `L+N`.
+The table shows a watch toggle, status, character-realm, observed signals, message count, cadence, text reuse, last seen, and source: `Local`, `Net`, or `L+N`.
 
-Selecting a row shows a plain-language assessment first, then detail sections for summary, activity, timing, content, local score breakdown, local channel baseline, peer evidence, and main signals. The assessment explains suspicion level and the strongest supporting metrics without treating the score as proof or a calibrated bot probability.
+The filter bar combines local triage filters with a data-driven channel dropdown. The channel list is built from stored local evidence, and `All Channels` also keeps network-only candidates visible.
+
+Selecting a row shows a plain-language assessment first, then detail sections for summary, activity, timing, content, why it was flagged, local channel baseline, peer evidence, and observed signals. The assessment explains what was observed, what it means, and why the current status was assigned.
 
 The timing detail uses user-facing terms: common intervals hide one-off low-signal buckets, tiny retained buckets display as `<1%` instead of `0%`, and stable runs group repeated same-cadence phases so duplicate runs are easier to understand. Click headers to sort and hover rows or headers for field explanations.
 
-Critical candidates show a `Report` button. It opens Big Bot Tracker's report assist and tries to open Blizzard's in-world report flow when a reportable player location is available. A successful report-frame open marks the candidate `Reported` locally, but you can clear that status from the assist window or candidate detail if the flow was opened by mistake or not completed. You must choose the Blizzard category, review or paste any text, and submit manually.
+`Very Strong Pattern` candidates show a `Report` button. It opens Big Bot Tracker's report assist and tries to open Blizzard's in-world report flow when a reportable player location is available. A successful report-frame open marks the candidate `Reported` locally, but you can clear that status from the assist window or candidate detail if the flow was opened by mistake or not completed. You must choose the Blizzard category, review or paste any text, and submit manually.
 
-The report window defaults to the `Active` filter, which hides locally handled candidates. Handled means `Reported` or `Ignored`. The eye button marks a candidate `Watched`, keeping it visible in `Active` even if it is otherwise handled. These triage states are local, non-destructive display state only; they do not change score, confidence, tier, sync, or stored evidence.
+The report window defaults to the `Active` filter, which hides locally handled candidates. Handled means `Reported` or `Ignored`. The eye button marks a candidate `Watched`, keeping it visible in `Active` even if it is otherwise handled. These triage states are local, non-destructive display state only; they do not change pattern strength, local evidence, status, sync, or stored evidence.
 
 Available filters:
 
@@ -51,9 +54,11 @@ Other report controls:
 - `Purge Selected` deletes the selected candidate's saved evidence
 - `Purge All` deletes saved candidate evidence
 
-## Scores and Privacy
+## Evidence and Privacy
 
-Local scores are based on capped evidence families: timing regularity, content similarity, activity/bursts, persistence, and local channel baseline outliers. High and Critical tiers require multiple local evidence families, and confidence depends on local evidence volume and diversity.
+Pattern strength is based on capped local evidence families: timing regularity, content similarity, activity/bursts, persistence, and local channel baseline outliers. Strong statuses require multiple local evidence families, and local evidence depends on local evidence volume and diversity.
+
+Developer documentation is in [docs/DETECTION_MODEL.md](docs/DETECTION_MODEL.md), [docs/DETECTION_STRATEGY.md](docs/DETECTION_STRATEGY.md), [docs/PLAYER_METRICS.md](docs/PLAYER_METRICS.md), and [docs/DATA_EPOCHS.md](docs/DATA_EPOCHS.md).
 
 The addon does not persist or sync raw chat text. Saved and synced data is compact: identity, observation ranges/windows, counts, timing summaries, template and shingle hashes, behavior summaries, score snapshots, baseline bins, hashed peer IDs, and version fields.
 
@@ -67,6 +72,7 @@ Sync starts local-only. On first run, a notice lets you enable hidden guild/grou
 - `/bbt status` prints tracked candidate and sync status
 - `/bbt sync on` enables sync
 - `/bbt sync off` disables sync
+- `/bbt monitor public on|off` toggles joined public channel monitoring
 - `/bbt monitor trade on|off` toggles Trade monitoring
 - `/bbt monitor services on|off` toggles Services monitoring
 - `/bbt export` writes a compact debug summary to `BigBotTrackerDB.settings.lastDebugSummary`

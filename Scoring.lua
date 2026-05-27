@@ -7,7 +7,7 @@ BBT.Scoring = BBT.Scoring or {}
 local Scoring = BBT.Scoring
 local Util = BBT.Util
 
-local FEATURE_VERSION = 3
+local FEATURE_VERSION = 4
 local LOG_2 = math.log(2)
 
 local function log2(value)
@@ -268,18 +268,31 @@ local function classifyCadence(timing, behavior)
     local topBucket = buckets[1]
     local topBucketPercent = topBucket and (topBucket.percent or 0) or 0
     local rollingEntropy = timing.lowestRollingEntropy or 1
+    local globalEntropy = timing.globalEntropy or 1
     local robustCv = timing.robustCoefficientVariation or 1
     local cadenceSwitches = timing.cadenceSwitchCount or 0
     local phaseCount = #(timing.cadencePhases or {})
+    local averageInterval = timing.averageInterval or 0
+    local medianInterval = timing.medianInterval or 0
+    local hasGapOutliers = medianInterval > 0 and averageInterval > (medianInterval * 1.5)
 
     if intervalCount < 3 then
         return "Sparse"
     end
     if cadenceSwitches > 0 and phaseCount >= 2 then
-        return "Mixed Regular"
+        return "Mixed Cadence"
+    end
+    if
+        topBucketPercent >= 95
+        and rollingEntropy <= 0.25
+        and globalEntropy <= 0.25
+        and robustCv <= 0.16
+        and not hasGapOutliers
+    then
+        return "Fixed Cadence"
     end
     if topBucketPercent >= 75 and rollingEntropy <= 0.25 and robustCv <= 0.16 then
-        return "Fixed Cadence"
+        return "Dominant Active-Run Cadence"
     end
     if
         (topBucketPercent >= 60 and rollingEntropy <= 0.45 and robustCv <= 0.35)
@@ -292,7 +305,7 @@ local function classifyCadence(timing, behavior)
         and (behavior.activeSpan or 0) <= 600
         and topBucketPercent < 55
     then
-        return "Burst-Only"
+        return "Burst Pattern"
     end
     return "Variable"
 end
@@ -413,25 +426,79 @@ local function calculateConfidence(candidate, familyCount)
     return Util.Clamp(confidence, 0, 100)
 end
 
-local function getTier(score, confidence, familyCount, familyScores, hasMeaningfulEvidence)
+local function countActiveWindows(timing)
+    local activeWindows = 0
+    for _, summary in pairs((timing or {}).windowSummaries or {}) do
+        if (summary.messageCount or 0) >= 3 then
+            activeWindows = activeWindows + 1
+        end
+    end
+    return activeWindows
+end
+
+local function getStatusCapReasons(candidate, familyCount)
+    local reasons = {}
+    local timing = candidate.timing or {}
+    local baseline = candidate.baseline or {}
+    local messageCount = candidate.totalMessages or 0
+    if messageCount < 6 then
+        reasons[#reasons + 1] = "Too few local messages"
+    elseif messageCount < 12 then
+        reasons[#reasons + 1] = "Limited local history"
+    end
+    if (timing.intervalCount or #(timing.intervals or {})) < 3 then
+        reasons[#reasons + 1] = "Too few timing samples"
+    end
+    if (familyCount or 0) <= 1 then
+        reasons[#reasons + 1] = "Only one signal type"
+    end
+    if (baseline.sampleCount or 0) > 0 and (baseline.sampleCount or 0) < 50 then
+        reasons[#reasons + 1] = "Baseline still warming up"
+    end
+    return reasons
+end
+
+local function getStatus(score, localEvidence, familyCount, familyScores, candidate, hasMeaningfulEvidence)
     if not hasMeaningfulEvidence then
-        return "Insufficient Data"
+        return "Observing"
     end
 
-    local strongTimingAndContent = (familyScores.timing or 0) >= 30 and (familyScores.content or 0) >= 25
-    if score >= 85 and confidence >= 70 and (familyCount >= 3 or strongTimingAndContent) then
-        return "Critical"
+    local messageCount = candidate.totalMessages or 0
+    local timing = candidate.timing or {}
+    local intervalCount = timing.intervalCount or #(timing.intervals or {})
+    if messageCount < 6 or intervalCount < 3 then
+        return "Observing"
     end
-    if score >= 70 and confidence >= 55 and familyCount >= 2 then
-        return "High"
+    if messageCount < 12 or familyCount <= 1 then
+        return "Early Pattern"
     end
-    if score >= 45 and confidence >= 35 and familyCount >= 1 then
-        return "Medium"
+
+    local hasContent = (familyScores.content or 0) >= 8
+    local hasTimingOrActivity = (familyScores.timing or 0) >= 8 or (familyScores.activity or 0) >= 6
+    local activeRuns = #(timing.cadencePhases or {})
+    local enoughVolume = (messageCount >= 18 and intervalCount >= 10)
+        or activeRuns >= 2
+        or countActiveWindows(timing) >= 2
+    if
+        score >= 85
+        and localEvidence >= 70
+        and familyCount >= 3
+        and hasContent
+        and hasTimingOrActivity
+        and enoughVolume
+    then
+        return "Very Strong Pattern"
+    end
+    if score >= 70 and localEvidence >= 55 and familyCount >= 2 then
+        return "Strong Pattern"
+    end
+    if score >= 45 and localEvidence >= 35 and familyCount >= 1 then
+        return "Repeated Pattern"
     end
     if score >= 20 then
-        return "Low"
+        return "Early Pattern"
     end
-    return "Insufficient Data"
+    return "Observing"
 end
 
 local function scoreTiming(candidate, reasons)
@@ -450,11 +517,14 @@ local function scoreTiming(candidate, reasons)
 
     if cadenceClass == "Fixed Cadence" then
         score = score + 15
-        addWeightedReason(reasons, 15, "Timing matches a fixed posting cadence.")
+        addWeightedReason(reasons, 15, "Intervals are almost entirely concentrated around one fixed posting cadence.")
+    elseif cadenceClass == "Dominant Active-Run Cadence" or cadenceClass == "Dominant Cadence" then
+        score = score + 10
+        addWeightedReason(reasons, 10, "Most active intervals cluster around one posting cadence with occasional gaps.")
     elseif cadenceClass == "Jittered Cadence" then
         score = score + 11
         addWeightedReason(reasons, 11, "Timing looks jittered but still cadence-bound.")
-    elseif cadenceClass == "Mixed Regular" then
+    elseif cadenceClass == "Mixed Cadence" or cadenceClass == "Mixed Regular" then
         score = score + 12
         addWeightedReason(reasons, 12, "Cadence changed between stable posting schedules.")
     end
@@ -496,7 +566,8 @@ local function scoreTiming(candidate, reasons)
         score = score + 3
     end
 
-    return Util.Clamp(score, 0, 35)
+    local cap = (cadenceClass == "Dominant Active-Run Cadence" or cadenceClass == "Dominant Cadence") and 32 or 35
+    return Util.Clamp(score, 0, cap)
 end
 
 local function scoreContent(candidate, reasons)
@@ -514,7 +585,11 @@ local function scoreContent(candidate, reasons)
 
     if templateReuse >= 80 then
         score = score + 13
-        addWeightedReason(reasons, 13, string.format("%d%% of local messages reuse the same text pattern.", templateReuse))
+        addWeightedReason(
+            reasons,
+            13,
+            string.format("%d%% of local messages reuse the same text pattern.", templateReuse)
+        )
     elseif templateReuse >= 60 then
         score = score + 9
         addWeightedReason(reasons, 9, "Most messages reuse the same exact template.")
@@ -605,7 +680,8 @@ end
 
 local function scoreBaseline(candidate, reasons)
     local baseline = candidate.baseline or {}
-    if (baseline.sampleCount or 0) < 8 then
+    local sampleCount = baseline.sampleCount or 0
+    if sampleCount < 50 then
         return 0
     end
 
@@ -634,7 +710,8 @@ local function scoreBaseline(candidate, reasons)
         score = score + 2
     end
 
-    return Util.Clamp(score, 0, 15)
+    local cap = sampleCount < 200 and 5 or 15
+    return Util.Clamp(score, 0, cap)
 end
 
 function Scoring.BucketInterval(seconds, binSize)
@@ -699,6 +776,7 @@ function Scoring.UpdateMetrics(candidate, settings)
     timing.medianInterval = robust.median
     timing.madInterval = robust.mad
     timing.iqrInterval = robust.iqr
+    timing.averageMedianRatio = robust.median > 0 and (average / robust.median) or 0
     timing.robustCoefficientVariation = robust.robustCoefficientVariation
     timing.globalEntropy = globalEntropy
     timing.rollingEntropy = rolling
@@ -802,7 +880,7 @@ function Scoring.HasMeaningfulLocalEvidence(candidate, settings)
             (content.adIntentTotal or 0) >= 3
             or (content.dominantIntentPercent or 0) >= 50
             or (content.uniqueTemplateRatio or 1) <= 0.5
-            or (baseline.postsPerHourPercentile or 0) >= 90
+            or ((baseline.sampleCount or 0) >= 50 and (baseline.postsPerHourPercentile or 0) >= 90)
         then
             return true
         end
@@ -847,8 +925,10 @@ function Scoring.Recalculate(candidate, settings)
     local networkOnly = (candidate.totalMessages or 0) == 0 and (network.peerCount or 0) > 0
     local displayScore = networkOnly and networkContext.score or localScore
     local meaningful = Scoring.HasMeaningfulLocalEvidence(candidate, settings)
-    local tier = networkOnly and "Preliminary" or getTier(localScore, confidence, familyCount, familyScores, meaningful)
+    local status = networkOnly and "Peer Context Only"
+        or getStatus(localScore, confidence, familyCount, familyScores, candidate, meaningful)
     local reasons = finalizeReasons(weightedReasons)
+    local statusCapReasons = networkOnly and { "Peer evidence only" } or getStatusCapReasons(candidate, familyCount)
 
     candidate.features = {
         version = FEATURE_VERSION,
@@ -857,6 +937,7 @@ function Scoring.Recalculate(candidate, settings)
         familyCount = familyCount,
         rawLocalScore = rawLocalScore,
         meaningfulLocalEvidence = meaningful,
+        statusCapReasons = statusCapReasons,
     }
 
     candidate.score = {
@@ -865,7 +946,9 @@ function Scoring.Recalculate(candidate, settings)
         networkAdjustedScore = displayScore,
         networkScore = networkContext.score,
         networkConfidence = networkContext.confidence,
-        tier = tier,
+        tier = status,
+        status = status,
+        statusCapReasons = statusCapReasons,
         confidence = networkOnly and 0 or confidence,
         evidenceFamilyCount = familyCount,
         familyScores = familyScores,
